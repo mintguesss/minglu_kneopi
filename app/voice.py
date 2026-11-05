@@ -12,12 +12,16 @@ voice.py — [資服版新增] 語音指令與語音提問
 模型：openai/whisper-large-v3-turbo（MIT 授權），第一次執行時下載約 1.6GB。
 """
 
+import os
 import re
+import subprocess
+import tempfile
+import wave
 
 import numpy as np
 
 from app import config, postprocess
-from app.messages import mode_name
+from app.messages import mode_name, t
 
 _ASR = None
 _CC = None          # 簡體 → 臺灣繁體（Whisper 中文常輸出簡體）
@@ -28,9 +32,43 @@ _HALLU_RE = re.compile(r"字幕|訂閱|點贊|點讚|按讚|謝謝觀看|謝謝�
 _PUNCT_RE = re.compile(r"[\s，。、！？!?,.：:；;「」『』（）()…~～-]+")
 
 
+def _load_asr_cpp():
+    """[KNEO Pi] whisper.cpp 每次呼叫才啟動，這裡只確認檔案都在。"""
+    global _CC
+    for path in (config.WHISPER_CLI_BIN, config.ASR_MODEL):
+        if not os.path.exists(path):
+            raise FileNotFoundError(path)
+    from opencc import OpenCC
+    _CC = OpenCC("s2twp")
+
+
+def _whisper_cpp(pcm: np.ndarray, prompt=None) -> str:
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        with wave.open(path, "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(16000)
+            f.writeframes((np.clip(pcm, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+        cmd = [config.WHISPER_CLI_BIN, "-m", config.ASR_MODEL, "-f", path, "-l", "zh",
+               "-nt", "-np", "-t", str(config.CPU_THREADS)]
+        if prompt:
+            cmd += ["--prompt", prompt]
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=config.ASR_TIMEOUT_SEC)
+    finally:
+        os.unlink(path)
+    if r.returncode != 0:
+        raise RuntimeError(f"whisper-cli 結束碼 {r.returncode}：{r.stderr[-300:]}")
+    return re.sub(r"\[[^\]]*\]|\([^)]*\)", "", r.stdout).strip()     # 去掉 [BLANK_AUDIO] 這類標記
+
+
 def load_asr():
     """載入 Whisper（伺服器啟動時呼叫一次）。"""
     global _ASR, _CC
+    if config.ASR_ENGINE == "whisper_cpp":
+        return _load_asr_cpp()
     import torch
     import transformers
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
@@ -74,12 +112,18 @@ def _whisper(feats, prompt_ids=None):
 
 def transcribe(pcm: np.ndarray) -> str:
     """16kHz float32 單聲道 → 繁體中文文字（固定用中文辨識）。聽不出內容時回傳空字串。"""
-    processor, model, dtype = _ASR
-    feats = processor(pcm, sampling_rate=16000, return_tensors="pt").input_features
-    feats = feats.to(model.device, dtype)
-    text = _whisper(feats)
+    if config.ASR_ENGINE == "whisper_cpp":
+        first = lambda: _whisper_cpp(pcm)
+        again = lambda: _whisper_cpp(pcm, _ASR_HINT)
+    else:
+        processor, model, dtype = _ASR
+        feats = processor(pcm, sampling_rate=16000, return_tensors="pt").input_features
+        feats = feats.to(model.device, dtype)
+        first = lambda: _whisper(feats)
+        again = lambda: _whisper(feats, processor.get_prompt_ids(_ASR_HINT, return_tensors="pt").to(model.device))
+    text = first()
     if text and not _HAS_CJK_RE.search(text):
-        retry = _whisper(feats, processor.get_prompt_ids(_ASR_HINT, return_tensors="pt").to(model.device))
+        retry = again()
         print(f"[ask] 第一次辨識成「{text}」，沒有中文字，加提示重新辨識 → 「{retry}」")
         if _HAS_CJK_RE.search(retry):
             text = retry
@@ -151,6 +195,13 @@ HELP_TEXT = ("你可以說：切換到過馬路模式、讀字模式、物品模
              "說開始連續或停止連續，可以開關連續描述。"
              "也可以說：說快一點、說慢一點、字大一點、字小一點、恢復預設設定。"
              "不想按按鈕的話，搖一搖手機也可以開始提問。")
+if not config.STREET_MODE:
+    HELP_TEXT = HELP_TEXT.replace("切換到過馬路模式、", "切換到").replace("現在是紅燈嗎、", "")
+    del _MODE_WORDS["street"]
+
+# 沒有過馬路模式時，問到這些一律回答「不提供」，不交給 Gemma（小模型常把燈號講錯）
+_NO_STREET_RE = re.compile(r"過馬路|过马路|馬路|马路|能不能過|可不可以過|可以過|能過|紅燈|綠燈|红灯|绿灯|黃燈|"
+                           r"燈號|灯号|號誌|号志|紅綠燈|红绿灯|斑馬線|斑马线|路口")
 
 
 def _find_mode(s: str):
@@ -195,6 +246,8 @@ def parse_command(text: str):
     s = _PUNCT_RE.sub("", text)
     if not s:
         return None
+    if not config.STREET_MODE and _NO_STREET_RE.search(s):
+        return ("street_unsupported", None)
     if _CONT_OFF_RE.search(s):
         return ("continuous", False)
     if _CONT_ON_RE.search(s):
@@ -238,7 +291,7 @@ def parse_command(text: str):
 # ---------------------------------------------------------------------------
 def question_mode(question: str) -> str:
     """問題該走哪個模式的流程（vqa = 交給 Gemma 自由回答）。"""
-    if _ASK_STREET_RE.search(question):
+    if config.STREET_MODE and _ASK_STREET_RE.search(question):
         return "street"
     if _ASK_READ_RE.search(question):
         return "read"
@@ -297,13 +350,13 @@ def answer(backend, image, question: str, current_mode: str, history=None):
     prompt = question
     if turns:
         prompt += "\n（鏡頭可能已經移動，以現在這張畫面為準。）"
-    kwargs = {"system_prompt": SYSTEM_ASK, "history": turns} if config.BACKEND == "gemma_hf" else {}
+    kwargs = {"system_prompt": SYSTEM_ASK, "history": turns} if config.BACKEND in ("gemma_hf", "gemma_llama") else {}
     text = postprocess.clean(backend.describe(image, prompt, max_new_tokens=config.ASK_MAX_TOKENS, **kwargs))
 
     # 問到人時，和描述模式一樣用 YOLO 再確認一次（漏掉人比較危險）
     if "人" in question and not pipeline._PERSON_RE.search(text):
         if pipeline._person_clearly_present(image):
-            from app.messages import t
+
             text = (text + " " + t("person_ahead")).strip()
     return text, "vqa"
 
@@ -311,8 +364,10 @@ def answer(backend, image, question: str, current_mode: str, history=None):
 def command_reply(cmd, arg, current_mode="auto") -> str:
     if cmd == "switch":
         return f"已切換到{mode_name(arg)}模式。"
+    if cmd == "street_unsupported":
+        return t("street_unsupported")
     if cmd == "switch_unknown":
-        return "沒聽清楚要切換到哪個模式。可以說：過馬路、周遭、室內、讀字、物品或自動。"
+        return "沒聽清楚要切換到哪個模式。可以說：" + ("過馬路、" if config.STREET_MODE else "") + "周遭、室內、讀字、物品或自動。"
     if cmd == "setting_unknown":
         return "沒聽懂要怎麼調整。可以說：說快一點、說慢一點、字大一點、字小一點，或把語速調到快。"
     if cmd == "which_mode":

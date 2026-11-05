@@ -46,6 +46,13 @@ MESSAGES = {
                         "zh": "{mode}模式。"},
     "ready":           {"en": "Assistant ready. Mode {mode}.",
                         "zh": "助理已就緒，目前是{mode}模式。"},
+    # ---- KNEO Pi：沒有過馬路模式，VLM 可能很慢或失敗 ----
+    "street_unsupported": {"en": "This device does not support crossing the street or reading traffic lights.",
+                           "zh": "這個裝置不提供過馬路和燈號判斷，請不要靠我過馬路。"},
+    "vlm_unavailable": {"en": "I cannot describe this right now.",
+                        "zh": "現在無法描述這個畫面。"},
+    "vlm_timeout":     {"en": "That took too long. Please try again.",
+                        "zh": "處理太久了，請再試一次。"},
 }
 
 MODE_NAMES = {

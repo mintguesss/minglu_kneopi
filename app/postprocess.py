@@ -72,6 +72,16 @@ def _clean_zh(text: str) -> str:
     return t.rstrip("，、；： ") + "。"
 
 
+_LIGHT_CLAIM_RE = re.compile(r"紅燈|綠燈|黃燈|红灯|绿灯|黄灯|紅綠燈|红绿灯|號誌|号志|燈號|灯号|交通燈|交通灯|"
+                             r"信號燈|信号灯|訊號燈|行人燈|過馬路|过马路|穿越馬路|可以通行|安全通過|安全地過")
+
+
+def strip_light_claims(text: str) -> str:
+    """[KNEO Pi] 刪掉提到燈號或能否過馬路的句子：小型 VLM 這方面不可靠，說錯會讓人走進車流。"""
+    sentences = re.findall(r"[^。！？!?]+[。！？!?]*", text or "")
+    return "".join(s for s in sentences if not _LIGHT_CLAIM_RE.search(s)).strip()
+
+
 def clean(text: str) -> str:
     """刪掉贅詞／照抄的角色設定＋修剪被截斷的句子＋整理格式，再交給語音"""
     if not text:

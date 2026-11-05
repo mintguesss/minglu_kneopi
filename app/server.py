@@ -20,6 +20,7 @@ server.py — 離線伺服器，讓手機透過瀏覽器使用
 import sys
 import io
 import os
+import re
 import ssl
 import json
 import time
@@ -948,8 +949,24 @@ def ensure_cert(certdir, ip):
     return cert, key
 
 
+def _apply_profile_to_page():
+    """依硬體設定檔調整手機頁面的文字與等待時間。"""
+    global PAGE
+    PAGE = (PAGE
+            .replace("{image:img, mode:MODE}, 30000)", f"{{image:img, mode:MODE}}, {config.PHONE_DESCRIBE_TIMEOUT_MS})")
+            .replace("history:convo}, 40000)", f"history:convo}}, {config.PHONE_ASK_TIMEOUT_MS})"))
+    if config.PROFILE != "desktop":
+        PAGE = PAGE.replace("電腦", "裝置")
+    if not config.STREET_MODE:
+        PAGE = re.sub(r'\s*<button class="opt"[^\n]*data-mode="street".*?</button>', "", PAGE)
+        # 手機可能還記著舊版選過的過馬路模式
+        PAGE = PAGE.replace("MODE=localStorage.getItem('mode')||'auto';",
+                            "MODE=localStorage.getItem('mode')||'auto'; if(MODE==='street') MODE='auto';")
+
+
 def main():
     global BACKEND, SAVE_DIR, VOICE_READY
+    _apply_profile_to_page()
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-voice", action="store_true",
                     help="[資服版] 不載入 Whisper（關閉語音指令／語音提問）")

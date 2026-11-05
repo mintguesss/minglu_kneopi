@@ -5,6 +5,8 @@ config.py — 應用程式的集中設定（模式→提示詞、選擇後端、
 （le=384、max_new_tokens=50、rep_penalty=1.2），以及使用情境 → 後端的對應
 """
 
+import os
+
 # ---------------------------------------------------------------------------
 # 各模式的提示詞 — 延續 Phase 1 評測過的安全提示詞
 # 原則：簡短 + 「只說清楚看到的」+「不要猜」
@@ -89,6 +91,8 @@ MODE_MAX_TOKENS = {
 BACKEND = "gemma_hf"         # "gemma_hf"（資服版預設，繁中，NVIDIA 顯示卡）| "smolvlm"（英文）| "gemma_npu"
 GEMMA_MODEL = "google/gemma-3-4b-it"
 GEMMA_4BIT = True            # 顯示卡用 4-bit 載入（約 3GB）；bf16 約 8.6GB，8GB 顯示卡放不下
+GEMMA_SYSTEM_ZH = ("你是視障者的視覺助理。一律使用臺灣的繁體中文回答。"
+                   "回答要簡短、直接，只說你清楚看到的東西，不要猜測，不要使用條列或符號。")
 
 # [資服版] 臺灣行人號誌偵測（app/ped_detector.py；模型檔 models/pedlight.pt 不存在時自動停用）
 PED_DETECTOR = True
@@ -163,6 +167,50 @@ MODE_PROMPTS_ZH = {
 
 # 中文一個字大約一個 token，上限比英文版略高，避免句子被截斷
 MODE_MAX_TOKENS_ZH = {"street": 20, "surrounding": 60, "indoor": 70, "read": 80, "object": 40}
+
+
+# ---------------------------------------------------------------------------
+# 硬體設定檔：MINGLU_PROFILE=kneopi 時改用 2GB 記憶體放得下的降級組合（見 README_KNEOPI.md）
+#   不設定 = desktop，行為和原本完全一樣
+# ---------------------------------------------------------------------------
+PROFILE = os.environ.get("MINGLU_PROFILE", "desktop")
+STREET_MODE = True                # False = 沒有過馬路模式，也不回答燈號與能否過馬路
+DETECTOR_ENGINE = "ultralytics"   # "ultralytics" | "kneron"（KL730 NPU）
+ASR_ENGINE = "transformers"       # "transformers" | "whisper_cpp"
+DESCRIBE_ENGINE = "vlm"           # "vlm" | "detector_first"（先用偵測結果回答，偵測不到才問 VLM）
+PHONE_DESCRIBE_TIMEOUT_MS = 30000
+PHONE_ASK_TIMEOUT_MS = 40000
+
+if PROFILE == "kneopi":
+    _HOME = os.environ.get("MINGLU_HOME", "/opt/minglu")
+    MODEL_DIR = os.path.join(_HOME, "models")
+    BIN_DIR = os.path.join(_HOME, "bin")
+    KNEOPI_EXAMPLES_DIR = os.path.join(_HOME, "kneopi-examples/ai_application/plus_python")
+    CPU_THREADS = 4
+
+    # Gemma 家族能看圖的最小版本，低量化（比 Gemma 3 4B 小，但仍超過 2GB，靠 mmap 從 microSD 讀）
+    BACKEND = "gemma_llama"
+    GEMMA_GGUF = os.path.join(MODEL_DIR, "gemma-4-E2B-it-Q3_K_S.gguf")
+    GEMMA_MMPROJ = os.path.join(MODEL_DIR, "mmproj-gemma-4-E2B-it-Q8_0.gguf")
+    GEMMA_IMAGE_EDGE = 384
+    GEMMA_CONTEXT = 2048
+    LLAMA_MTMD_BIN = os.path.join(BIN_DIR, "llama-mtmd-cli")
+    VLM_TIMEOUT_SEC = 600
+
+    STREET_MODE = False
+    PED_DETECTOR = False
+    YOLO_NEF = os.path.join(MODEL_DIR, "yolov8n_730.nef")
+    DETECTOR_ENGINE = "kneron"
+    DESCRIBE_ENGINE = "detector_first"
+    READ_ENGINE = "easyocr"       # 不讓 Gemma 補讀：太慢
+
+    ASR_ENGINE = "whisper_cpp"
+    ASR_MODEL = os.path.join(MODEL_DIR, "ggml-base-q5_1.bin")
+    WHISPER_CLI_BIN = os.path.join(BIN_DIR, "whisper-cli")
+    ASR_TIMEOUT_SEC = 60
+
+    PHONE_DESCRIBE_TIMEOUT_MS = (VLM_TIMEOUT_SEC + 30) * 1000
+    PHONE_ASK_TIMEOUT_MS = (VLM_TIMEOUT_SEC + ASR_TIMEOUT_SEC + 30) * 1000
 
 
 def _use_zh() -> bool:

@@ -10,12 +10,25 @@ detect.py — 物件偵測（YOLOv8n），供過馬路模式的混合式流程�
 容錯：沒有安裝 ultralytics → 回傳 []（程式照常執行，不會當掉）。
 """
 
+from app import config
+
 # 過馬路模式關心的類別（名稱依 YOLO 的 COCO 類別）
 VEHICLE_CLASSES = {"car", "truck", "bus", "motorcycle", "bicycle"}
 PERSON_CLASS = "person"
 _RELEVANT = VEHICLE_CLASSES | {PERSON_CLASS}
 
 _MODEL = None
+
+
+def _detect_kneron(image, conf, classes):
+    from app import detect_kneron
+    try:
+        dets = detect_kneron.infer(image, conf)
+    except Exception as e:
+        print(f"[warn] NPU 偵測失敗：{e}")
+        return []
+    keep = _RELEVANT if classes is None else classes
+    return [d for d in dets if keep == "all" or d["cls"] in keep]
 
 
 def _model():
@@ -34,6 +47,8 @@ def detect(image, conf: float = 0.35, classes=None):
     沒有 ultralytics → ([], size)（容錯）。
     """
     w, h = image.size
+    if config.DETECTOR_ENGINE == "kneron":
+        return _detect_kneron(image, conf, classes), (w, h)
     try:
         m = _model()
     except Exception:

@@ -1,0 +1,8 @@
+# KNEO Pi 版的 Python 套件（Gemma 與 Whisper 用 llama.cpp、whisper.cpp 跑，不需要 transformers）
+numpy
+pillow
+opencv-python-headless
+easyocr                       # 會一起裝 PyTorch，讀字時才載入
+opencc-python-reimplemented
+pypinyin
+cryptography

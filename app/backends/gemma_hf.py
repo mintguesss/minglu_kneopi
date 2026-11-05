@@ -15,12 +15,12 @@ import torch
 import transformers
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
+from app import config
 from app.base import VLMBackend
 
 _DTYPE_KW = "dtype" if int(transformers.__version__.split(".")[0]) >= 5 else "torch_dtype"
 
-SYSTEM_ZH = ("你是視障者的視覺助理。一律使用臺灣的繁體中文回答。"
-             "回答要簡短、直接，只說你清楚看到的東西，不要猜測，不要使用條列或符號。")
+SYSTEM_ZH = config.GEMMA_SYSTEM_ZH
 
 
 class GemmaHFBackend(VLMBackend):

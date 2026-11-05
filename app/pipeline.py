@@ -46,7 +46,7 @@ def route(image):
     偏向過馬路：過馬路線索從信心 0.25 就接受（漏判過馬路 = L4 風險，漏判其他模式 = 無害）
     其他線索維持 ≥0.40"""
     dets, (w, h) = detect.detect(image, conf=0.25, classes="all")
-    if any(d["cls"] in _STREET_CUES for d in dets):
+    if config.STREET_MODE and any(d["cls"] in _STREET_CUES for d in dets):
         return "street", dets
 
     dets = [d for d in dets if d["conf"] >= 0.40]
@@ -107,6 +107,8 @@ def describe(backend, image, mode: str):
     處理一張畫面。回傳 (text, mode_used)。
     mode="auto" → 先自動選模式，再在句首說出模式名稱讓使用者知道
     """
+    if mode == "street" and not config.STREET_MODE:   # 手機可能還記著舊版選過的過馬路模式
+        return t("street_unsupported"), mode
     auto = mode == "auto"
     if auto:
         mode, _ = route(image)
@@ -123,14 +125,19 @@ def describe(backend, image, mode: str):
         from app import street_mode
         text, _hazard, _info = street_mode.describe(backend, image)
     else:
-        text = postprocess.clean(
-            backend.describe(image, config.get_prompt(mode),
-                             max_new_tokens=config.get_max_tokens(mode))
-        )
-        # 行人複查（混合式）：VLM 沒提到人，但偵測模型清楚看到人 → 補一句提醒
-        if mode in ("surrounding", "indoor") and not _PERSON_RE.search(text):
-            if _person_clearly_present(image):
-                text = (text + " " + t("person_ahead")).strip()
+        text = None
+        if config.DESCRIBE_ENGINE == "detector_first":
+            from app import scene
+            text = scene.describe(image, mode)
+        if text is None:
+            text = postprocess.clean(
+                backend.describe(image, config.get_prompt(mode),
+                                 max_new_tokens=config.get_max_tokens(mode))
+            )
+            # 行人複查（混合式）：VLM 沒提到人，但偵測模型清楚看到人 → 補一句提醒
+            if mode in ("surrounding", "indoor") and not _PERSON_RE.search(text):
+                if _person_clearly_present(image):
+                    text = (text + " " + t("person_ahead")).strip()
 
     if auto:
         text = f"{t('mode_prefix', mode=mode_name(mode))} {text}"

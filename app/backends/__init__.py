@@ -18,4 +18,7 @@ def get_backend(name: str, **kwargs) -> VLMBackend:
     if name == "gemma_hf":
         from app.backends.gemma_hf import GemmaHFBackend
         return GemmaHFBackend(**kwargs)
-    raise ValueError(f"不認得的後端：{name!r}（可用：smolvlm、gemma_npu、gemma_hf）")
+    if name == "gemma_llama":
+        from app.backends.gemma_llama import GemmaLlamaBackend
+        return GemmaLlamaBackend(**kwargs)
+    raise ValueError(f"不認得的後端：{name!r}（可用：smolvlm、gemma_llama、gemma_npu、gemma_hf）")
