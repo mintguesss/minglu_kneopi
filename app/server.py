@@ -957,6 +957,10 @@ def _apply_profile_to_page():
             .replace("history:convo}, 40000)", f"history:convo}}, {config.PHONE_ASK_TIMEOUT_MS})"))
     if config.PROFILE != "desktop":
         PAGE = PAGE.replace("電腦", "裝置")
+        # 回答可能要等好幾分鐘，看不到畫面的人要聽得到還在處理
+        PAGE = PAGE.replace("setInterval(ping, 10000);",
+                            "setInterval(ping, 10000);\nsetInterval(()=>{ if(card.classList.contains('busy')"
+                            " && !speechSynthesis.speaking) speak('還在處理，請稍等'); }, 30000);")
     if not config.STREET_MODE:
         PAGE = re.sub(r'\s*<button class="opt"[^\n]*data-mode="street".*?</button>', "", PAGE)
         # 手機可能還記著舊版選過的過馬路模式
@@ -998,6 +1002,8 @@ def main():
     BACKEND.load()
     BACKEND.warmup()
     print(f"[info] 載入完成，實際使用：{BACKEND.name}")
+    from app import ocr
+    ocr.preload()          # 只有 KNEO Pi 版會在這裡先載入，第一次讀字不用多等
 
     if not args.no_voice:
         print(f"[info] 載入語音辨識（{config.ASR_MODEL}）...")

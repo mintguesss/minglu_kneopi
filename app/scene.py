@@ -34,6 +34,7 @@ COCO_ZH = {
 }
 
 _DIGITS = {1: "一", 2: "兩", 3: "三", 4: "四", 5: "五"}
+_VEHICLES = {"car", "bus", "truck", "motorcycle", "bicycle", "train"}
 
 
 def _area(box, w, h):
@@ -49,8 +50,8 @@ def _position(box, w):
     return "正前方"
 
 
-def _count(n):
-    return _DIGITS.get(n, "多") + "個"
+def _count(n, cls):
+    return _DIGITS.get(n, "多") + ("輛" if cls in _VEHICLES else "個")
 
 
 def _sentence(dets, w, h):
@@ -65,7 +66,7 @@ def _sentence(dets, w, h):
     parts = []
     for (pos, cls), g in ranked[:MAX_ITEMS]:
         near = "，很近" if g["area"] > NEAR_AREA else ""
-        parts.append(f"{pos}有{_count(g['n'])}{COCO_ZH.get(cls, cls)}{near}")
+        parts.append(f"{pos}有{_count(g['n'], cls)}{COCO_ZH.get(cls, cls)}{near}")
     return "；".join(parts) + "。"
 
 

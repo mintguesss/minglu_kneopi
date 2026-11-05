@@ -13,7 +13,7 @@ import re
 import subprocess
 import tempfile
 
-from app import config, postprocess
+from app import config, ocr, postprocess
 from app.base import VLMBackend
 from app.messages import t
 
@@ -29,7 +29,7 @@ class GemmaLlamaBackend(VLMBackend):
         self.binary = config.LLAMA_MTMD_BIN
 
     def load(self) -> None:
-        for path in (self.model, self.mmproj, self.binary):
+        for path in (self.model, self.mmproj, self.binary, config.GEMMA_TEMPLATE):
             if not os.path.exists(path):
                 print(f"[warn] 找不到 {path}，這次啟動無法使用 Gemma")
 
@@ -38,25 +38,33 @@ class GemmaLlamaBackend(VLMBackend):
         lines = [system_prompt or config.GEMMA_SYSTEM_ZH]
         for q, a in history or []:
             lines += [f"使用者：{q}", f"你：{a}"]
-        lines.append(prompt)
+        lines.append("請看這張照片回答：" + prompt)
         return "\n".join(lines)
+
+    @staticmethod
+    def _template():
+        with open(config.GEMMA_TEMPLATE, encoding="utf-8") as f:
+            return f.read()
 
     def _generate(self, image, prompt, max_new_tokens):
         image = image.convert("RGB")
         image.thumbnail((config.GEMMA_IMAGE_EDGE, config.GEMMA_IMAGE_EDGE))
         fd, path = tempfile.mkstemp(suffix=".jpg")
         os.close(fd)
+        ocr.release()       # EasyOCR 佔約 1GB，留著的話 Gemma 會慢到超過時限
         try:
             image.save(path, quality=90)
             r = subprocess.run(
                 [self.binary, "-m", self.model, "--mmproj", self.mmproj, "--image", path,
                  "-p", prompt, "-n", str(max_new_tokens), "-c", str(config.GEMMA_CONTEXT),
-                 "-t", str(config.CPU_THREADS), "--temp", "0",
+                 "-t", str(config.CPU_THREADS), "--temp", "0", "--jinja",
+                 "--chat-template", self._template(),
                  "--repeat-penalty", str(config.GEMMA_GEN_PARAMS["repetition_penalty"])],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=config.VLM_TIMEOUT_SEC)
         finally:
             os.unlink(path)
+            ocr.preload()
         if r.returncode != 0:
             raise RuntimeError(f"llama-mtmd-cli 結束碼 {r.returncode}：{r.stderr[-300:]}")
         return _THINK_RE.sub("", r.stdout).strip()

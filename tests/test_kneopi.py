@@ -10,7 +10,7 @@ os.environ["MINGLU_PROFILE"] = "kneopi"
 import numpy as np
 from PIL import Image
 
-from app import config, detect, detect_kneron, pipeline, postprocess, scene, server, voice
+from app import config, detect, detect_kneron, ocr, pipeline, postprocess, scene, server, voice
 from app.backends.gemma_llama import GemmaLlamaBackend
 from app.messages import t
 
@@ -30,6 +30,20 @@ def _outputs(hit=None):
                 box[0, side * 16 + d, r, c] = 30.0
         out += [box, cls]
     return out
+
+
+class NpuLayoutTest(unittest.TestCase):
+    def test_same_as_element_by_element_rearrange(self):
+        shape, s_onnx, s_npu = (1, 3, 4, 5), (60, 20, 5, 1), (480, 16, 80, 4)
+        data = np.linspace(-1, 1, 60, dtype=np.float32).reshape(shape)
+        offsets = detect_kneron.npu_offsets(shape, s_onnx, s_npu)
+        got = np.frombuffer(detect_kneron.quantize_int8(data, 64.0, offsets), dtype=np.int8)
+        self.assertEqual(len(got), 480)
+        want = np.zeros(480, dtype=np.int8)
+        q = np.clip(np.round(data * 64.0), -128, 127).astype(np.int8).ravel()
+        for idx in np.ndindex(shape):
+            want[np.dot(idx, s_npu)] = q[np.dot(idx, s_onnx)]
+        np.testing.assert_array_equal(got, want)
 
 
 def _det(cls, box, conf=0.9):
@@ -137,6 +151,9 @@ class SceneTest(unittest.TestCase):
         text = self._scene([_det("chair", (0, 0, 20, 20)), _det("person", (30, 0, 70, 90))])
         self.assertEqual(text, "正前方有一個人，很近；左前方有一個椅子。")
 
+    def test_vehicle_measure_word(self):
+        self.assertIn("一輛公車", self._scene([_det("bus", (40, 0, 60, 20))]))
+
     def test_counts(self):
         self.assertIn("兩個人", self._scene([_det("person", (40, 0, 50, 10)), _det("person", (50, 0, 60, 10))]))
 
@@ -172,7 +189,8 @@ class SceneTest(unittest.TestCase):
 class GemmaBackendTest(unittest.TestCase):
     def _run(self, stdout="一張椅子。", returncode=0, side_effect=None, **kwargs):
         result = mock.Mock(stdout=stdout, stderr="", returncode=returncode)
-        with mock.patch("subprocess.run", return_value=result, side_effect=side_effect) as run:
+        with mock.patch("subprocess.run", return_value=result, side_effect=side_effect) as run, \
+             mock.patch.object(GemmaLlamaBackend, "_template", return_value="TEMPLATE"):
             text = GemmaLlamaBackend().describe(Image.new("RGB", (800, 600)), "這是什麼？", 40, **kwargs)
         return text, run
 
@@ -188,7 +206,7 @@ class GemmaBackendTest(unittest.TestCase):
     def test_history_and_system_prompt_are_sent(self):
         _, run = self._run(system_prompt="系統提示", history=[("前面有什麼", "一張桌子")])
         prompt = run.call_args[0][0][run.call_args[0][0].index("-p") + 1]
-        self.assertEqual(prompt, "系統提示\n使用者：前面有什麼\n你：一張桌子\n這是什麼？")
+        self.assertEqual(prompt, "系統提示\n使用者：前面有什麼\n你：一張桌子\n請看這張照片回答：這是什麼？")
 
     def test_light_claim_removed(self):
         self.assertEqual(self._run(stdout="現在是綠燈。")[0], t("vlm_unavailable"))
@@ -206,8 +224,15 @@ class GemmaBackendTest(unittest.TestCase):
         text, target = voice.answer(backend, IMAGE, "這是什麼", "auto", [{"q": "前面", "a": "桌子", "t": "vqa"}])
         self.assertEqual((text, target), ("一張椅子。", "vqa"))
         kwargs = backend.describe.call_args[1]
-        self.assertEqual(kwargs["system_prompt"], voice.SYSTEM_ASK)
+        self.assertEqual(kwargs["system_prompt"], config.GEMMA_SYSTEM_ASK)
         self.assertEqual(kwargs["history"], [("前面", "桌子")])
+
+
+class AudioCtxTest(unittest.TestCase):
+    def test_follows_recording_length(self):
+        self.assertEqual(voice._audio_ctx(16000), 256)
+        self.assertEqual(voice._audio_ctx(160000), 564)
+        self.assertEqual(voice._audio_ctx(16000 * 60), 1500)
 
 
 class WhisperTest(unittest.TestCase):
@@ -228,6 +253,50 @@ class WhisperTest(unittest.TestCase):
 
     def test_hallucination_is_empty(self):
         self.assertEqual(self._run("謝謝觀看\n")[0], "")
+
+
+class OcrWorkerTest(unittest.TestCase):
+    """用真的子程序跑一個假的 worker，驗證 EasyOCR 子程序的協定與記憶體釋放。"""
+
+    FAKE = ("import sys,json\nprint('torch warning noise',flush=True)\nprint('READY',flush=True)\n"
+            "for line in sys.stdin:\n"
+            "    print('RESULT '+json.dumps([[[[0,0],[9,0],[9,9],[0,9]],'出口',0.9],[[[0,20],[9,20],[9,29],[0,29]],'糊',0.1]]),flush=True)\n")
+
+    def setUp(self):
+        ocr.release()
+        import sys
+        real = subprocess.Popen
+        self.addCleanup(ocr.release)
+        self.patcher = mock.patch("subprocess.Popen", side_effect=lambda cmd, **kw: real([sys.executable, "-c", self.FAKE], **kw))
+        self.popen = self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def test_reads_filters_and_keeps_worker(self):
+        self.assertEqual(ocr.read_detail(IMAGE), ("出口", 2, 3))
+        self.assertEqual(ocr.read_detail(IMAGE), ("出口", 2, 3))
+        self.assertEqual(self.popen.call_count, 1)
+
+    def test_release_then_read_restarts(self):
+        ocr.read_detail(IMAGE)
+        worker = ocr._WORKER
+        ocr.release()
+        self.assertIsNotNone(worker.poll())
+        self.assertIsNone(ocr._WORKER)
+        ocr.read_detail(IMAGE)
+        self.assertEqual(self.popen.call_count, 2)
+
+    def test_gemma_releases_ocr_first_and_preloads_after(self):
+        calls = []
+        result = mock.Mock(stdout="一張椅子。", stderr="", returncode=0)
+        def run(*a, **k):
+            calls.append("gemma")
+            return result
+        with mock.patch("subprocess.run", side_effect=run), \
+             mock.patch.object(GemmaLlamaBackend, "_template", return_value="T"), \
+             mock.patch.object(ocr, "release", side_effect=lambda: calls.append("release")), \
+             mock.patch.object(ocr, "preload", side_effect=lambda: calls.append("preload")):
+            GemmaLlamaBackend().describe(IMAGE, "這是什麼", 8)
+        self.assertEqual(calls, ["release", "gemma", "preload"])
 
 
 class ProfileTest(unittest.TestCase):

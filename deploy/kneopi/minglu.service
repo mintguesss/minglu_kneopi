@@ -4,11 +4,12 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+User=@USER@
 Environment=MINGLU_PROFILE=kneopi
-Environment=MINGLU_HOME=/opt/minglu
+Environment=MINGLU_HOME=@HOME@
 Environment=PYTHONUNBUFFERED=1
-WorkingDirectory=/opt/minglu/app
-ExecStart=/opt/minglu/venv/bin/python -m app.server --https
+WorkingDirectory=@HOME@/app
+ExecStart=@HOME@/venv/bin/python -m app.server --https
 Restart=on-failure
 RestartSec=5
 

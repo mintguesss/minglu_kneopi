@@ -10,6 +10,7 @@ detect_kneron.py — [KNEO Pi] 用 KL730 NPU 跑專案原本的 YOLOv8n
 
 import os
 import sys
+import time
 
 import numpy as np
 from PIL import Image
@@ -127,9 +128,44 @@ def postprocess(outputs, conf, ratio, pad, image_size, iou_thres=IOU_THRES):
     return dets
 
 
+def npu_offsets(shape, stride_onnx, stride_npu):
+    """每個 ONNX 元素在 NPU 緩衝區的位置 → (ONNX 位置, NPU 位置, NPU 緩衝區大小)。"""
+    index = np.indices(tuple(shape), dtype=np.int32).reshape(len(shape), -1)
+    onnx_offset = np.tensordot(np.asarray(stride_onnx, dtype=np.int32), index, axes=1)
+    npu_offset = np.tensordot(np.asarray(stride_npu, dtype=np.int32), index, axes=1)
+    size = max(int(n) * int(s) for n, s in zip(shape, stride_npu))
+    return onnx_offset, npu_offset, size
+
+
+def quantize_int8(data, factor, offsets):
+    """量化成 int8 並排成 NPU 的版面。結果和官方的 convert_onnx_data_to_npu_data 相同，
+    但官方版逐一處理每個元素，在這塊板子上一張 640×640 要 54 秒，這裡用向量運算。"""
+    onnx_offset, npu_offset, size = offsets
+    quantized = np.clip(np.round(data * factor), -128, 127).astype(np.int8).ravel()
+    out = np.zeros(size, dtype=np.int8)
+    out[npu_offset] = quantized[onnx_offset]
+    return out.tobytes()
+
+
 # ---------------------------------------------------------------------------
 # NPU（只有這段需要 KNEO Pi）
 # ---------------------------------------------------------------------------
+def _reset_if_firmware_running(kp):
+    """韌體跑起來後不能再載第二個模型，所以程式重啟時要先讓 NPU 回到 Loader 狀態。"""
+    devices = kp.core.scan_devices().device_descriptor_list
+    if not devices or "Loader" in devices[0].firmware:
+        return
+    device_group = kp.core.connect_devices(usb_port_ids=[0])
+    kp.core.reset_device(device_group=device_group, reset_mode=kp.ResetMode.KP_RESET_REBOOT)
+    kp.core.disconnect_devices(device_group)
+    for _ in range(30):
+        time.sleep(1)
+        devices = kp.core.scan_devices().device_descriptor_list
+        if devices and "Loader" in devices[0].firmware:
+            return
+    raise RuntimeError("NPU 重置後沒有回到 Loader 狀態")
+
+
 def _connect():
     global _DEVICE
     if _DEVICE is not None:
@@ -138,6 +174,7 @@ def _connect():
     if root not in sys.path:
         sys.path.insert(1, root)
     import kp
+    _reset_if_firmware_running(kp)
     device_group = kp.core.connect_devices(usb_port_ids=[0])
     kp.core.load_firmware_from_file(
         device_group=device_group,
@@ -145,18 +182,26 @@ def _connect():
         ncpu_fw_path="")
     kp.core.set_timeout(device_group=device_group, milliseconds=5000)
     model = kp.core.load_model_from_file(device_group=device_group, file_path=config.YOLO_NEF)
-    _DEVICE = (device_group, model)
+
+    node = model.models[0].input_nodes[0]
+    if node.data_layout != kp.ModelTensorDataLayout.KP_MODEL_TENSOR_DATA_LAYOUT_4W4C8B:
+        raise RuntimeError(f"不支援的 NPU 輸入版面：{node.data_layout}")
+    fixed = node.quantization_parameters.v1.quantized_fixed_point_descriptor_list
+    if len(fixed) != 1:
+        raise RuntimeError("不支援逐通道量化的輸入")
+    factor = float(2.0 ** fixed[0].radix * fixed[0].scale.value)
+    info = node.tensor_shape_info.v2
+    offsets = npu_offsets(info.shape, info.stride_onnx, info.stride_npu)
+    _DEVICE = (device_group, model, factor, offsets)
     return _DEVICE
 
 
 def infer(image, conf):
     """PIL.Image → 偵測結果。NPU 或 kp 有問題時丟出例外，由 detect.py 處理。"""
-    device_group, model = _connect()      # 順便把官方範例加進 sys.path，下面才 import 得到
+    device_group, model, factor, offsets = _connect()
     import kp
-    from utils.ExampleHelper import convert_onnx_data_to_npu_data
     data, ratio, pad = letterbox(image)
-    buffer = convert_onnx_data_to_npu_data(
-        tensor_descriptor=model.models[0].input_nodes[0], onnx_data=data)
+    buffer = quantize_int8(data, factor, offsets)
     kp.inference.generic_data_inference_send(
         device_group=device_group,
         generic_inference_input_descriptor=kp.GenericDataInferenceDescriptor(

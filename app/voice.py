@@ -42,6 +42,12 @@ def _load_asr_cpp():
     _CC = OpenCC("s2twp")
 
 
+def _audio_ctx(samples: int) -> int:
+    """Whisper 編碼器只看錄音實際長度（每秒 50 格），不用每次算滿 30 秒。
+    KNEO Pi 實測 2.5 秒語音：1500 格 19.5 秒，256 格 3.6 秒，辨識結果相同。"""
+    return min(1500, max(256, samples * 50 // 16000 + 64))
+
+
 def _whisper_cpp(pcm: np.ndarray, prompt=None) -> str:
     fd, path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
@@ -52,7 +58,7 @@ def _whisper_cpp(pcm: np.ndarray, prompt=None) -> str:
             f.setframerate(16000)
             f.writeframes((np.clip(pcm, -1.0, 1.0) * 32767).astype("<i2").tobytes())
         cmd = [config.WHISPER_CLI_BIN, "-m", config.ASR_MODEL, "-f", path, "-l", "zh",
-               "-nt", "-np", "-t", str(config.CPU_THREADS)]
+               "-nt", "-np", "-t", str(config.CPU_THREADS), "-ac", str(_audio_ctx(len(pcm)))]
         if prompt:
             cmd += ["--prompt", prompt]
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -350,7 +356,7 @@ def answer(backend, image, question: str, current_mode: str, history=None):
     prompt = question
     if turns:
         prompt += "\n（鏡頭可能已經移動，以現在這張畫面為準。）"
-    kwargs = {"system_prompt": SYSTEM_ASK, "history": turns} if config.BACKEND in ("gemma_hf", "gemma_llama") else {}
+    kwargs = {"system_prompt": config.GEMMA_SYSTEM_ASK or SYSTEM_ASK, "history": turns} if config.BACKEND in ("gemma_hf", "gemma_llama") else {}
     text = postprocess.clean(backend.describe(image, prompt, max_new_tokens=config.ASK_MAX_TOKENS, **kwargs))
 
     # 問到人時，和描述模式一樣用 YOLO 再確認一次（漏掉人比較危險）

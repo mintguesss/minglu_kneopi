@@ -62,6 +62,8 @@ DEFAULT_MODE = "surrounding"
 LANG = "zh"
 OCR_LANGS = ["ch_tra", "en"]   # 繁體中文 + 英文
 OCR_MIN_CONF = 0.30            # 低於此信心的文字不唸（EasyOCR 的雜訊比較多）
+OCR_READ_KWARGS = {}           # 傳給 EasyOCR readtext 的參數
+OCR_WORKER = False             # True = EasyOCR 放在子程序（見 app/ocr_worker.py）
 # 讀字模式用哪個引擎：
 #   "auto"    （預設）先用 EasyOCR；它偵測到文字但大半沒把握時，改由 Gemma 補讀。
 #             EasyOCR 完全沒偵測到文字時不叫 Gemma，直接說沒有文字（避免 VLM 憑空編出文字）
@@ -91,6 +93,7 @@ MODE_MAX_TOKENS = {
 BACKEND = "gemma_hf"         # "gemma_hf"（資服版預設，繁中，NVIDIA 顯示卡）| "smolvlm"（英文）| "gemma_npu"
 GEMMA_MODEL = "google/gemma-3-4b-it"
 GEMMA_4BIT = True            # 顯示卡用 4-bit 載入（約 3GB）；bf16 約 8.6GB，8GB 顯示卡放不下
+GEMMA_SYSTEM_ASK = None        # 語音問答的系統提示；None = 用 app/voice.py 的 SYSTEM_ASK
 GEMMA_SYSTEM_ZH = ("你是視障者的視覺助理。一律使用臺灣的繁體中文回答。"
                    "回答要簡短、直接，只說你清楚看到的東西，不要猜測，不要使用條列或符號。")
 
@@ -182,7 +185,7 @@ PHONE_DESCRIBE_TIMEOUT_MS = 30000
 PHONE_ASK_TIMEOUT_MS = 40000
 
 if PROFILE == "kneopi":
-    _HOME = os.environ.get("MINGLU_HOME", "/opt/minglu")
+    _HOME = os.environ.get("MINGLU_HOME", os.path.expanduser("~/minglu"))
     MODEL_DIR = os.path.join(_HOME, "models")
     BIN_DIR = os.path.join(_HOME, "bin")
     KNEOPI_EXAMPLES_DIR = os.path.join(_HOME, "kneopi-examples/ai_application/plus_python")
@@ -192,10 +195,22 @@ if PROFILE == "kneopi":
     BACKEND = "gemma_llama"
     GEMMA_GGUF = os.path.join(MODEL_DIR, "gemma-4-E2B-it-Q3_K_S.gguf")
     GEMMA_MMPROJ = os.path.join(MODEL_DIR, "mmproj-gemma-4-E2B-it-Q8_0.gguf")
+    GEMMA_TEMPLATE = os.path.join(MODEL_DIR, "gemma-nothink.jinja")   # 見 tools/kneopi/extract_template.py
     GEMMA_IMAGE_EDGE = 384
     GEMMA_CONTEXT = 2048
     LLAMA_MTMD_BIN = os.path.join(BIN_DIR, "llama-mtmd-cli")
     VLM_TIMEOUT_SEC = 600
+
+    # 模型權重比實體記憶體大，每生成一個 token 都要從 microSD 重讀（實測約 10 秒），
+    # 提示也一樣要花時間，所以這裡的提示和回答長度都盡量短。
+    GEMMA_SYSTEM_ZH = "你是視障者的助理。用臺灣繁體中文簡短回答，只說清楚看到的，不確定就說不確定。"
+    GEMMA_SYSTEM_ASK = "你是視障者的助理。用臺灣繁體中文一句話直接回答，沒看到就說沒有看到，不要猜。"
+    ASK_MAX_TOKENS = 24
+    MODE_MAX_TOKENS_ZH = {**MODE_MAX_TOKENS_ZH, "surrounding": 24, "indoor": 24, "object": 16}
+    MODE_PROMPTS_ZH = {**MODE_PROMPTS_ZH,
+                       "surrounding": "用一句話說前方主要有什麼和方位。",
+                       "indoor": "用一句話說前方的空間和擋路的東西。",
+                       "object": "這是什麼東西？"}
 
     STREET_MODE = False
     PED_DETECTOR = False
@@ -203,6 +218,8 @@ if PROFILE == "kneopi":
     DETECTOR_ENGINE = "kneron"
     DESCRIBE_ENGINE = "detector_first"
     READ_ENGINE = "easyocr"       # 不讓 Gemma 補讀：太慢
+    OCR_READ_KWARGS = {"canvas_size": 1280}   # 預設 2560；實測 148 秒降到 103 秒，文字一樣正確
+    OCR_WORKER = True
 
     ASR_ENGINE = "whisper_cpp"
     ASR_MODEL = os.path.join(MODEL_DIR, "ggml-base-q5_1.bin")
