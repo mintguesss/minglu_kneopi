@@ -291,6 +291,10 @@ class WhisperTest(unittest.TestCase):
         self.assertEqual(args[args.index("-l") + 1], "zh")
         self.assertEqual(args[args.index("-m") + 1], config.ASR_MODEL)
 
+    def test_repeated_phrase_collapsed(self):
+        self.assertEqual(self._run("這是什麼東西這是什麼東西這是什麼東西\n")[0], "這是什麼東西")
+        self.assertEqual(self._run("前面有車子嗎\n")[0], "前面有車子嗎")
+
     def test_blank_audio_is_empty(self):
         self.assertEqual(self._run("[BLANK_AUDIO]\n")[0], "")
 

@@ -415,9 +415,10 @@ function pickVoice(){
   const pref=['Samantha','Aria','Jenny','Google US English','Microsoft Zira','Daniel','Karen','en-US'];
   for(const p of pref){ const m=vs.find(v=>v.name&&v.name.includes(p)); if(m){VOICE=m;break;} }
   if(!VOICE) VOICE=vs.find(v=>v.lang&&v.lang.toLowerCase()==='en-us')||vs[0]||null;
-  // 中文語音：優先臺灣（zh-TW）→ 其他中文
-  const zh=all.filter(v=>v.lang&&v.lang.toLowerCase().startsWith('zh'));
-  VOICE_ZH=zh.find(v=>/tw|hant/i.test(v.lang))||zh.find(v=>!/cn|hans/i.test(v.lang))||zh[0]||null;
+  // 中文語音：優先臺灣 → 其他普通話。粵語（zh-HK、yue）不選，念出來使用者聽不懂
+  //   Android 有些語音的語言代碼是 cmn-TW，不是 zh-TW
+  const zh=all.filter(v=>v.lang&&/^(zh|cmn)([-_]|$)/i.test(v.lang)&&!/hk|mo\b|yue/i.test(v.lang+' '+(v.name||'')));
+  VOICE_ZH=zh.find(v=>/tw|hant/i.test(v.lang))||zh[0]||null;
 }
 if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged=pickVoice; pickVoice(); }
 const CJK=/[\\u3400-\\u9fff\\uf900-\\ufaff]/;

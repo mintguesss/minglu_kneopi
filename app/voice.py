@@ -42,6 +42,9 @@ def _load_asr_cpp():
     _CC = OpenCC("s2twp")
 
 
+_REPEAT_PHRASE_RE = re.compile(r"(.{2,}?)(?:[\s，,。]*\1)+")
+
+
 def _audio_ctx(samples: int) -> int:
     """Whisper 編碼器只看錄音實際長度（每秒 50 格），不用每次算滿 30 秒。
     KNEO Pi 實測 2.5 秒語音：1500 格 19.5 秒，256 格 3.6 秒，辨識結果相同。"""
@@ -67,7 +70,8 @@ def _whisper_cpp(pcm: np.ndarray, prompt=None) -> str:
         os.unlink(path)
     if r.returncode != 0:
         raise RuntimeError(f"whisper-cli 結束碼 {r.returncode}：{r.stderr[-300:]}")
-    return re.sub(r"\[[^\]]*\]|\([^)]*\)", "", r.stdout).strip()     # 去掉 [BLANK_AUDIO] 這類標記
+    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", r.stdout).strip()     # 去掉 [BLANK_AUDIO] 這類標記
+    return _REPEAT_PHRASE_RE.sub(r"\1", text)                         # 小模型常把同一句重複好幾次
 
 
 def load_asr():
