@@ -81,6 +81,8 @@ def _person_clearly_present(image) -> bool:
 
 
 def _vlm_read(backend, image) -> str:
+    if hasattr(backend, "read_text"):         # 這類後端有專用的讀字流程
+        return postprocess.clean(backend.read_text(image))
     return postprocess.clean(
         backend.describe(image, config.get_prompt("read"),
                          max_new_tokens=config.get_max_tokens("read")))
@@ -126,7 +128,7 @@ def describe(backend, image, mode: str):
         text, _hazard, _info = street_mode.describe(backend, image)
     else:
         text = None
-        if config.DESCRIBE_ENGINE == "detector_first":
+        if config.DESCRIBE_ENGINE == "detector_first" and mode != "object":
             from app import scene
             text = scene.describe(image, mode)
         if text is None:

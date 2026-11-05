@@ -740,11 +740,14 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(n).decode("utf-8"))
             mode = payload.get("mode", config.DEFAULT_MODE)
-            pcm = np.frombuffer(base64.b64decode(payload["audio"]), dtype="<i2").astype(np.float32) / 32768.0
 
             t0 = time.perf_counter()
-            with GPU_LOCK:
-                heard = voice.transcribe(pcm)
+            if payload.get("text"):           # 第二階段：手機已經拿到辨識結果，只要回答
+                heard = payload["text"]
+            else:
+                pcm = np.frombuffer(base64.b64decode(payload["audio"]), dtype="<i2").astype(np.float32) / 32768.0
+                with GPU_LOCK:
+                    heard = voice.transcribe(pcm)
             print(f"[ask] 聽到：{heard or '（沒有內容）'}")
             if not heard:
                 self._send(200, json.dumps({"action": "none", "heard": "",
@@ -765,6 +768,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps(out))
                 return
 
+            if payload.get("stage") == "hear":    # 第一階段：先讓使用者知道聽到了，再花時間回答
+                self._send(200, json.dumps({"action": "pending", "heard": heard}))
+                return
             if not payload.get("image"):
                 self._send(200, json.dumps({"action": "none", "heard": heard,
                                             "text": "相機還沒準備好。"}))
@@ -956,6 +962,16 @@ def _apply_profile_to_page():
             .replace("{image:img, mode:MODE}, 30000)", f"{{image:img, mode:MODE}}, {config.PHONE_DESCRIBE_TIMEOUT_MS})")
             .replace("history:convo}, 40000)", f"history:convo}}, {config.PHONE_ASK_TIMEOUT_MS})"))
     if config.PROFILE != "desktop":
+        # 回答要 20 幾秒：辨識完先唸「聽到了」，看不到畫面的人才知道系統有在動
+        PAGE = PAGE.replace(
+            f"const j=await api('/ask', {{audio:audio, image:grabFrame(), mode:MODE, history:convo}}, {config.PHONE_ASK_TIMEOUT_MS});",
+            "const frame=grabFrame();\n"
+            "    let j=await api('/ask', {audio:audio, mode:MODE, history:convo, stage:'hear'}, 60000);\n"
+            "    if(j.action==='pending'){\n"
+            "      setHeard(j.heard, false); show('聽到了，正在看…', {hint:true}); speak('聽到了，正在看');\n"
+            f"      j=await api('/ask', {{text:j.heard, image:frame, mode:MODE, history:convo}}, {config.PHONE_ASK_TIMEOUT_MS});\n"
+            "    }")
+    if config.PROFILE != "desktop":
         PAGE = PAGE.replace("電腦", "裝置")
         # 回答可能要等好幾分鐘，看不到畫面的人要聽得到還在處理
         PAGE = PAGE.replace("setInterval(ping, 10000);",
@@ -1002,8 +1018,6 @@ def main():
     BACKEND.load()
     BACKEND.warmup()
     print(f"[info] 載入完成，實際使用：{BACKEND.name}")
-    from app import ocr
-    ocr.preload()          # 只有 KNEO Pi 版會在這裡先載入，第一次讀字不用多等
 
     if not args.no_voice:
         print(f"[info] 載入語音辨識（{config.ASR_MODEL}）...")

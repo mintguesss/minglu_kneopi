@@ -62,8 +62,6 @@ DEFAULT_MODE = "surrounding"
 LANG = "zh"
 OCR_LANGS = ["ch_tra", "en"]   # 繁體中文 + 英文
 OCR_MIN_CONF = 0.30            # 低於此信心的文字不唸（EasyOCR 的雜訊比較多）
-OCR_READ_KWARGS = {}           # 傳給 EasyOCR readtext 的參數
-OCR_WORKER = False             # True = EasyOCR 放在子程序（見 app/ocr_worker.py）
 # 讀字模式用哪個引擎：
 #   "auto"    （預設）先用 EasyOCR；它偵測到文字但大半沒把握時，改由 Gemma 補讀。
 #             EasyOCR 完全沒偵測到文字時不叫 Gemma，直接說沒有文字（避免 VLM 憑空編出文字）
@@ -191,20 +189,18 @@ if PROFILE == "kneopi":
     KNEOPI_EXAMPLES_DIR = os.path.join(_HOME, "kneopi-examples/ai_application/plus_python")
     CPU_THREADS = 4
 
-    # Gemma 家族能看圖的最小版本，低量化（比 Gemma 3 4B 小，但仍超過 2GB，靠 mmap 從 microSD 讀）
-    BACKEND = "gemma_llama"
-    GEMMA_GGUF = os.path.join(MODEL_DIR, "gemma-4-E2B-it-Q3_K_S.gguf")
-    GEMMA_MMPROJ = os.path.join(MODEL_DIR, "mmproj-gemma-4-E2B-it-Q8_0.gguf")
-    GEMMA_TEMPLATE = os.path.join(MODEL_DIR, "gemma-nothink.jinja")   # 見 tools/kneopi/extract_template.py
-    GEMMA_IMAGE_EDGE = 384
-    GEMMA_CONTEXT = 2048
-    LLAMA_MTMD_BIN = os.path.join(BIN_DIR, "llama-mtmd-cli")
-    VLM_TIMEOUT_SEC = 600
+    # Gemma 家族能看圖的最小版本，用 LiteRT-LM 跑（見 app/backends/gemma_litert.py）
+    BACKEND = "gemma_litert"
+    GEMMA_LITERTLM = os.path.join(MODEL_DIR, "gemma-4-E2B-it.litertlm")
+    GEMMA_CACHE_DIR = os.path.join(MODEL_DIR, "litert-cache")
+    GEMMA_VISION_TOKENS = 70       # 模型提供的最低解析度；140 要多等約 30 秒
+    VLM_TIMEOUT_SEC = 120
 
-    # 模型權重比實體記憶體大，每生成一個 token 都要從 microSD 重讀（實測約 10 秒），
-    # 提示也一樣要花時間，所以這裡的提示和回答長度都盡量短。
+    # 影像編碼固定約 19.5 秒，之後每秒約 1~2 個 token，所以回答長度要短
     GEMMA_SYSTEM_ZH = "你是視障者的助理。用臺灣繁體中文簡短回答，只說清楚看到的，不確定就說不確定。"
     GEMMA_SYSTEM_ASK = "你是視障者的助理。用臺灣繁體中文一句話直接回答，沒看到就說沒有看到，不要猜。"
+    GEMMA_SYSTEM_READ = "把圖片中的文字照原樣唸出來，不要猜，不要解釋。沒有文字就說沒有看到文字。"
+    GEMMA_READ_MAX_TOKENS = 80
     ASK_MAX_TOKENS = 24
     MODE_MAX_TOKENS_ZH = {**MODE_MAX_TOKENS_ZH, "surrounding": 24, "indoor": 24, "object": 16}
     MODE_PROMPTS_ZH = {**MODE_PROMPTS_ZH,
@@ -217,9 +213,7 @@ if PROFILE == "kneopi":
     YOLO_NEF = os.path.join(MODEL_DIR, "yolov8n_730.nef")
     DETECTOR_ENGINE = "kneron"
     DESCRIBE_ENGINE = "detector_first"
-    READ_ENGINE = "easyocr"       # 不讓 Gemma 補讀：太慢
-    OCR_READ_KWARGS = {"canvas_size": 1280}   # 預設 2560；實測 148 秒降到 103 秒，文字一樣正確
-    OCR_WORKER = True
+    READ_ENGINE = "vlm"            # Gemma 讀字約 40 秒；EasyOCR 在這塊板子上要 90~160 秒
 
     ASR_ENGINE = "whisper_cpp"
     ASR_MODEL = os.path.join(MODEL_DIR, "ggml-base-q5_1.bin")

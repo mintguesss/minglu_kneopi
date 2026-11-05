@@ -11,12 +11,6 @@ EasyOCR（JaidedAI，Apache-2.0，https://github.com/JaidedAI/EasyOCR）。
 有 CUDA 顯示卡時自動使用，沒有就用 CPU。
 """
 
-import json
-import os
-import subprocess
-import sys
-import tempfile
-
 import numpy as np
 
 from app import config
@@ -38,66 +32,11 @@ def _engine():
     return _ENGINE
 
 
-# ---------------------------------------------------------------------------
-# [KNEO Pi] EasyOCR 放在子程序（app/ocr_worker.py），要跑 Gemma 前可以關掉把記憶體還回來
-# ---------------------------------------------------------------------------
-_WORKER = None
-_WORKER_READY = False
-
-
-def preload():
-    """在背景開始載入 EasyOCR，不等它完成。"""
-    global _WORKER, _WORKER_READY
-    if config.OCR_WORKER and (_WORKER is None or _WORKER.poll() is not None):
-        _WORKER = subprocess.Popen([sys.executable, "-m", "app.ocr_worker"], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, text=True, encoding="utf-8")
-        _WORKER_READY = False
-
-
-def release():
-    """關掉 EasyOCR 子程序，把記憶體還給系統。"""
-    global _WORKER, _WORKER_READY
-    if _WORKER is not None:
-        _WORKER.kill()
-        _WORKER.stdin.close()
-        _WORKER.stdout.close()
-        _WORKER.wait()
-    _WORKER, _WORKER_READY = None, False
-
-
-def _worker_line(prefix):
-    for line in _WORKER.stdout:
-        if line.startswith(prefix):
-            return line
-    release()
-    raise RuntimeError("EasyOCR 子程序意外結束")
-
-
-def _worker_read(image):
-    global _WORKER_READY
-    preload()
-    if not _WORKER_READY:
-        _worker_line("READY")
-        _WORKER_READY = True
-    fd, path = tempfile.mkstemp(suffix=".png")
-    os.close(fd)
-    try:
-        image.convert("RGB").save(path)
-        _WORKER.stdin.write(path + "\n")
-        _WORKER.stdin.flush()
-        return json.loads(_worker_line("RESULT ")[len("RESULT "):])
-    finally:
-        os.unlink(path)
-
-
 def read_detail(image):
     """PIL.Image → (文字, 夠有把握的字數, 偵測到的總字數)。
     文字 = 信心達標的部分（由上到下、由左到右）；完全沒有達標的字時為空字串。"""
-    if config.OCR_WORKER:
-        result = _worker_read(image)
-    else:
-        arr = np.array(image.convert("RGB"))
-        result = _engine().readtext(arr, **config.OCR_READ_KWARGS)   # [(四個角點, 文字, 信心)]
+    arr = np.array(image.convert("RGB"))
+    result = _engine().readtext(arr)          # [(四個角點, 文字, 信心)]
     items, total = [], 0
     for box, txt, score in result:
         if not txt or not txt.strip():

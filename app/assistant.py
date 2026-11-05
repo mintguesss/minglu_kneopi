@@ -32,8 +32,8 @@ def build_backend(backend=None, device=None):
     backend = backend or config.BACKEND
     device = device or config.DEVICE
     config.BACKEND = backend          # [資服版] 讓提示詞語言跟著實際使用的後端走
-    if backend == "gemma_llama":
-        return get_backend("gemma_llama")
+    if backend == "gemma_litert":
+        return get_backend("gemma_litert")
     if backend == "gemma_hf":
         return get_backend("gemma_hf", model_id=config.GEMMA_MODEL,
                            gen_params=config.GEMMA_GEN_PARAMS)

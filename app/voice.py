@@ -320,6 +320,8 @@ def is_followup(question: str) -> bool:
     return bool(s) and bool(_FOLLOWUP_RE.search(s))
 
 
+_ASK_HELD_RE = re.compile(r"手上|手裡|手里|拿的|拿著|拿着|握著|握着")
+
 # 語音對話專用的系統提示：和描述模式不同，要「回答問題」而不是「描述畫面」
 SYSTEM_ASK = (
     "你是視障者的視覺助理，正在用語音和使用者對話。一律使用臺灣的繁體中文。"
@@ -354,9 +356,11 @@ def answer(backend, image, question: str, current_mode: str, history=None):
 
     turns = [(h.get("q", ""), h.get("a", "")) for h in (history or [])[-config.ASK_HISTORY_TURNS:]]
     prompt = question
+    if config.BACKEND == "gemma_litert" and _ASK_HELD_RE.search(question):
+        prompt = "這是什麼東西？"       # 照片不一定拍到手，照原話問 Gemma 常答「沒有看到」
     if turns:
         prompt += "\n（鏡頭可能已經移動，以現在這張畫面為準。）"
-    kwargs = {"system_prompt": config.GEMMA_SYSTEM_ASK or SYSTEM_ASK, "history": turns} if config.BACKEND in ("gemma_hf", "gemma_llama") else {}
+    kwargs = {"system_prompt": config.GEMMA_SYSTEM_ASK or SYSTEM_ASK, "history": turns} if config.BACKEND in ("gemma_hf", "gemma_litert") else {}
     text = postprocess.clean(backend.describe(image, prompt, max_new_tokens=config.ASK_MAX_TOKENS, **kwargs))
 
     # 問到人時，和描述模式一樣用 YOLO 再確認一次（漏掉人比較危險）

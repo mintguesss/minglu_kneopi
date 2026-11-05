@@ -17,6 +17,7 @@ CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode = ssl.CERT_NONE
 folder = sys.argv[1]
+LAST = {}
 
 
 def image(name):
@@ -37,6 +38,8 @@ def post(label, path, body):
             out = json.loads(r.read().decode())
     except Exception as e:
         out = {"error": repr(e)}
+    LAST.clear()
+    LAST.update(out)
     print(f"[{label}] {time.perf_counter() - t0:.1f} 秒\n  {json.dumps(out, ensure_ascii=False)[:300]}", flush=True)
 
 
@@ -46,11 +49,27 @@ with urllib.request.urlopen(BASE + "/", context=CTX) as r:
     page = r.read().decode()
 print("頁面有過馬路按鈕：", 'data-mode="street"' in page, "；有讀字按鈕：", 'data-mode="read"' in page, flush=True)
 
-bus, sign = image("bus.jpg"), image("sign.jpg")
+bus, sign, ear, bottle = image("bus.jpg"), image("sign.jpg"), image("headphones_1.jpg"), image("water_3.jpg")
+
+
+def ask(label, wav, frame):
+    """和手機一樣分兩階段：先辨識語音，再帶著畫面問答。"""
+    t0 = time.perf_counter()
+    post(label + "：聽", "/ask", {"audio": audio(wav), "mode": "auto", "history": [], "stage": "hear"})
+    heard = LAST.get("heard")
+    print(f"  辨識耗時 {time.perf_counter() - t0:.1f} 秒", flush=True)
+    if LAST.get("action") == "pending":
+        post(label + "：答", "/ask", {"text": heard, "image": frame, "mode": "auto", "history": []})
+    print(f"  總耗時 {time.perf_counter() - t0:.1f} 秒", flush=True)
+
+
 post("過馬路（舊手機設定）", "/describe", {"image": bus, "mode": "street"})
-post("自動", "/describe", {"image": bus, "mode": "auto"})
-post("周遭", "/describe", {"image": bus, "mode": "surrounding"})
-post("語音：切換到讀字", "/ask", {"audio": audio("say2.wav"), "image": bus, "mode": "auto", "history": []})
+post("周遭（偵測）", "/describe", {"image": bus, "mode": "surrounding"})
+post("周遭（第二次）", "/describe", {"image": bus, "mode": "surrounding"})
+post("物品：耳機", "/describe", {"image": ear, "mode": "object"})
+post("物品：水瓶", "/describe", {"image": bottle, "mode": "object"})
 post("讀字", "/describe", {"image": sign, "mode": "read"})
-post("語音：前面有什麼（會問 Gemma）", "/ask", {"audio": audio("say1.wav"), "image": bus, "mode": "auto", "history": []})
+post("語音指令：切換到讀字", "/ask", {"audio": audio("say2.wav"), "mode": "auto", "history": [], "stage": "hear"})
+ask("語音：我手上拿的是什麼（耳機照）", "say3.wav", ear)
+ask("語音：前面有什麼（公車照）", "say1.wav", bus)
 print("E2E_DONE", flush=True)

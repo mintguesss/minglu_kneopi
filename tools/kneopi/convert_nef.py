@@ -24,7 +24,8 @@ os.environ.setdefault("MINGLU_PROFILE", "kneopi")
 
 from app import detect_kneron  # noqa: E402
 
-model = onnx.load(os.path.join(WORK, "yolov8n_cut.onnx"))
+NAME = sys.argv[1] if len(sys.argv) > 1 else "yolov8n"
+model = onnx.load(os.path.join(WORK, NAME + "_cut.onnx"))
 input_name = model.graph.input[0].name
 optimized = kneronnxopt.optimize(model)
 input_name = optimized.graph.input[0].name
@@ -40,7 +41,7 @@ print("校正圖片：", len(calibration))
 bie = config.analysis({input_name: calibration})
 nef = ktc.compile([config])
 
-target = os.path.join(ROOT, "models/yolov8n_730.nef")
+target = os.path.join(ROOT, "models", NAME + "_730.nef")
 shutil.copyfile(nef, target)
 print("輸出：", target, os.path.getsize(target), "bytes")
 
@@ -48,7 +49,9 @@ image = Image.open(os.path.join(WORK, "bus.jpg"))
 data, ratio, pad = detect_kneron.letterbox(image)
 outputs = ktc.kneron_inference([data], input_names=[input_name], nef_file=target, platform=730)
 print("輸出形狀：", [np.asarray(o).shape for o in outputs])
-dets = detect_kneron.postprocess(outputs, 0.25, ratio, pad, image.size)
-with open(os.path.join(WORK, "nef_bus.json"), "w") as f:
+names_path = os.path.join(WORK, NAME + "_names.json")
+names = json.load(open(names_path)) if os.path.exists(names_path) else detect_kneron.COCO_NAMES
+dets = detect_kneron.postprocess(outputs, 0.25, ratio, pad, image.size, names=names)
+with open(os.path.join(WORK, NAME + "_nef_bus.json"), "w") as f:
     json.dump(dets, f, indent=1)
 print(json.dumps(dets, indent=1))

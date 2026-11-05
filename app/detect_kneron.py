@@ -20,7 +20,7 @@ from app import config
 INPUT_SIZE = 640
 IOU_THRES = 0.45
 REG_MAX = 16
-NUM_CLASSES = 80
+
 
 COCO_NAMES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
@@ -72,7 +72,7 @@ def _decode_level(box_logits, cls_logits, input_size=INPUT_SIZE):
     cy, cx = np.meshgrid(np.arange(h, dtype=np.float32) + 0.5,
                          np.arange(w, dtype=np.float32) + 0.5, indexing="ij")
     boxes = np.stack((cx - dist[0], cy - dist[1], cx + dist[2], cy + dist[3]), axis=-1) * stride
-    return boxes.reshape(-1, 4), _sigmoid(cls_logits[0]).reshape(NUM_CLASSES, -1).T
+    return boxes.reshape(-1, 4), _sigmoid(cls_logits[0]).reshape(cls_logits.shape[1], -1).T
 
 
 def _nms(boxes, scores, iou_thres):
@@ -94,12 +94,12 @@ def _nms(boxes, scores, iou_thres):
     return keep
 
 
-def postprocess(outputs, conf, ratio, pad, image_size, iou_thres=IOU_THRES):
+def postprocess(outputs, conf, ratio, pad, image_size, iou_thres=IOU_THRES, names=COCO_NAMES):
     """六個輸出張量（順序不拘）→ [{"cls", "conf", "box"}]（box 是原圖像素座標）。"""
     levels = {}
     for out in outputs:
         out = np.asarray(out, dtype=np.float32)
-        kind = {REG_MAX * 4: "box", NUM_CLASSES: "cls"}[out.shape[1]]
+        kind = "box" if out.shape[1] == REG_MAX * 4 else "cls"
         levels.setdefault(out.shape[2], {})[kind] = out
     decoded = [_decode_level(lv["box"], lv["cls"]) for lv in levels.values()]
     boxes = np.concatenate([d[0] for d in decoded])
@@ -123,7 +123,7 @@ def postprocess(outputs, conf, ratio, pad, image_size, iou_thres=IOU_THRES):
         y1 = float(np.clip((boxes[i, 1] - top) / ratio, 0, h))
         x2 = float(np.clip((boxes[i, 2] - left) / ratio, 0, w))
         y2 = float(np.clip((boxes[i, 3] - top) / ratio, 0, h))
-        dets.append({"cls": COCO_NAMES[int(cls_id[i])], "conf": float(score[i]),
+        dets.append({"cls": names[int(cls_id[i])], "conf": float(score[i]),
                      "box": (x1, y1, x2, y2)})
     return dets
 
@@ -174,12 +174,20 @@ def _connect():
     if root not in sys.path:
         sys.path.insert(1, root)
     import kp
-    _reset_if_firmware_running(kp)
-    device_group = kp.core.connect_devices(usb_port_ids=[0])
-    kp.core.load_firmware_from_file(
-        device_group=device_group,
-        scpu_fw_path=os.path.join(root, "res/firmware/KL730/kp_firmware.tar"),
-        ncpu_fw_path="")
+    for attempt in range(5):           # 重置後 NPU 要一點時間才準備好，連線或傳韌體都可能暫時失敗
+        try:
+            _reset_if_firmware_running(kp)
+            device_group = kp.core.connect_devices(usb_port_ids=[0])
+            kp.core.load_firmware_from_file(
+                device_group=device_group,
+                scpu_fw_path=os.path.join(root, "res/firmware/KL730/kp_firmware.tar"),
+                ncpu_fw_path="")
+            break
+        except kp.ApiKPException as e:
+            print(f"[warn] NPU 第 {attempt + 1} 次啟動失敗：{e}")
+            if attempt == 4:
+                raise
+            time.sleep(3)
     kp.core.set_timeout(device_group=device_group, milliseconds=5000)
     model = kp.core.load_model_from_file(device_group=device_group, file_path=config.YOLO_NEF)
 

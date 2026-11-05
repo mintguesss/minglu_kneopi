@@ -10,7 +10,6 @@ from app import detect
 MIN_CONF = 0.40
 MAX_ITEMS = 4
 NEAR_AREA = 0.15          # 框面積 > 畫面 15% 就說「很近」
-HELD_AREA = 0.12          # 物品模式：和 pipeline.route 的手持物品門檻相同
 
 COCO_ZH = {
     "person": "人", "bicycle": "腳踏車", "car": "汽車", "motorcycle": "機車", "airplane": "飛機",
@@ -76,12 +75,4 @@ def describe(image, mode):
     dets = [d for d in dets if d["cls"] != "traffic light"]     # 這個版本不談號誌
     if not dets:
         return None
-    if mode == "object":
-        held = [d for d in dets if d["cls"] != "person"
-                and _area(d["box"], w, h) > HELD_AREA
-                and 0.2 < ((d["box"][0] + d["box"][2]) / 2) / w < 0.8]
-        if not held:
-            return None
-        best = max(held, key=lambda d: d["conf"])
-        return f"這看起來是{COCO_ZH.get(best['cls'], best['cls'])}。"
     return _sentence(dets, w, h)
