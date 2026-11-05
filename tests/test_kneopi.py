@@ -278,18 +278,60 @@ class AudioCtxTest(unittest.TestCase):
         self.assertEqual(voice._audio_ctx(16000 * 60), 1500)
 
 
-class WhisperTest(unittest.TestCase):
-    def _run(self, stdout):
-        result = mock.Mock(stdout=stdout, stderr="", returncode=0)
-        with mock.patch("subprocess.run", return_value=result) as run:
-            return voice.transcribe(np.zeros(16000, dtype=np.float32)), run
+class FakeWhisperServer:
+    """在本機開一個假的 whisper-server，驗證真的送出的 multipart 內容。"""
 
-    def test_passes_language_and_returns_text(self):
-        text, run = self._run(" 前面有什麼\n")
+    def __init__(self, reply):
+        import http.server
+        import threading
+        outer = self
+        self.reply, self.requests = reply, []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                outer.requests.append((self.path, self.headers["Content-Type"], body))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(outer.reply.encode("utf-8"))
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class WhisperTest(unittest.TestCase):
+    def _run(self, reply, seconds=1):
+        fake = FakeWhisperServer(reply)
+        self.addCleanup(fake.close)
+        with mock.patch.object(config, "WHISPER_PORT", fake.port), \
+             mock.patch.object(voice, "_start_whisper_server"):
+            text = voice.transcribe(np.zeros(16000 * seconds, dtype=np.float32))
+        return text, fake
+
+    def test_sends_language_audio_ctx_and_wav(self):
+        text, fake = self._run(" 前面有什麼\n", seconds=2)
         self.assertEqual(text, "前面有什麼")
-        args = run.call_args[0][0]
-        self.assertEqual(args[args.index("-l") + 1], "zh")
-        self.assertEqual(args[args.index("-m") + 1], config.ASR_MODEL)
+        path, ctype, body = fake.requests[0]
+        self.assertEqual(path, "/inference")
+        self.assertIn("multipart/form-data; boundary=", ctype)
+        self.assertIn(b'name="language"\r\n\r\nzh\r\n', body)
+        self.assertIn(b'name="audio_ctx"\r\n\r\n256\r\n', body)
+        self.assertIn(b'filename="a.wav"', body)
+        self.assertIn(b"RIFF", body)
+        self.assertNotIn(b'name="prompt"', body)
+
+    def test_retry_with_hint_when_no_chinese(self):
+        text, fake = self._run("Svo kat eg\n")
+        self.assertEqual(len(fake.requests), 2)
+        self.assertIn(b'name="prompt"', fake.requests[1][2])
 
     def test_repeated_phrase_collapsed(self):
         self.assertEqual(self._run("這是什麼東西這是什麼東西這是什麼東西\n")[0], "這是什麼東西")

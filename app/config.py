@@ -171,7 +171,7 @@ MODE_MAX_TOKENS_ZH = {"street": 20, "surrounding": 60, "indoor": 70, "read": 80,
 
 
 # ---------------------------------------------------------------------------
-# 硬體設定檔：MINGLU_PROFILE=kneopi 時改用 2GB 記憶體放得下的降級組合（見 README_KNEOPI.md）
+# 硬體設定檔：MINGLU_PROFILE=kneopi 時改用 2GB 記憶體放得下的降級組合（見 README.md）
 #   不設定 = desktop，行為和原本完全一樣
 # ---------------------------------------------------------------------------
 PROFILE = os.environ.get("MINGLU_PROFILE", "desktop")
@@ -217,7 +217,8 @@ if PROFILE == "kneopi":
 
     ASR_ENGINE = "whisper_cpp"
     ASR_MODEL = os.path.join(MODEL_DIR, "ggml-base-q5_1.bin")
-    WHISPER_CLI_BIN = os.path.join(BIN_DIR, "whisper-cli")
+    WHISPER_SERVER_BIN = os.path.join(BIN_DIR, "whisper-server")   # 常駐，見 app/voice.py
+    WHISPER_PORT = 8178
     ASR_TIMEOUT_SEC = 60
 
     PHONE_DESCRIBE_TIMEOUT_MS = (VLM_TIMEOUT_SEC + 30) * 1000

@@ -15,7 +15,7 @@ voice.py — [資服版新增] 語音指令與語音提問
 import os
 import re
 import subprocess
-import tempfile
+
 import wave
 
 import numpy as np
@@ -32,14 +32,43 @@ _HALLU_RE = re.compile(r"字幕|訂閱|點贊|點讚|按讚|謝謝觀看|謝謝�
 _PUNCT_RE = re.compile(r"[\s，。、！？!?,.：:；;「」『』（）()…~～-]+")
 
 
+_WHISPER_SERVER = None
+
+
+def _start_whisper_server():
+    """[KNEO Pi] whisper.cpp 常駐在背景（whisper-server）。
+    每次重新啟動 whisper-cli 會把 Gemma 擠出記憶體：實測每題要多讀 300~700MB 的 microSD，
+    常駐後 Gemma 回答從 35~47 秒降到約 28 秒。"""
+    global _WHISPER_SERVER
+    if _WHISPER_SERVER is not None and _WHISPER_SERVER.poll() is None:
+        return
+    _WHISPER_SERVER = subprocess.Popen(
+        [config.WHISPER_SERVER_BIN, "-m", config.ASR_MODEL, "--host", "127.0.0.1",
+         "--port", str(config.WHISPER_PORT), "-t", str(config.CPU_THREADS), "-l", "zh", "-nt"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    import atexit
+    atexit.register(_WHISPER_SERVER.terminate)
+    import time
+    import urllib.request
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{config.WHISPER_PORT}/", timeout=1)
+            return
+        except Exception:
+            if _WHISPER_SERVER.poll() is not None:
+                raise RuntimeError("whisper-server 啟動失敗")
+            time.sleep(0.5)
+    raise RuntimeError("whisper-server 啟動逾時")
+
+
 def _load_asr_cpp():
-    """[KNEO Pi] whisper.cpp 每次呼叫才啟動，這裡只確認檔案都在。"""
     global _CC
-    for path in (config.WHISPER_CLI_BIN, config.ASR_MODEL):
+    for path in (config.WHISPER_SERVER_BIN, config.ASR_MODEL):
         if not os.path.exists(path):
             raise FileNotFoundError(path)
     from opencc import OpenCC
     _CC = OpenCC("s2twp")
+    _start_whisper_server()
 
 
 _REPEAT_PHRASE_RE = re.compile(r"(.{2,}?)(?:[\s，,。]*\1)+")
@@ -51,26 +80,37 @@ def _audio_ctx(samples: int) -> int:
     return min(1500, max(256, samples * 50 // 16000 + 64))
 
 
+def _wav_bytes(pcm: np.ndarray) -> bytes:
+    import io
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(16000)
+        f.writeframes((np.clip(pcm, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+    return buf.getvalue()
+
+
 def _whisper_cpp(pcm: np.ndarray, prompt=None) -> str:
-    fd, path = tempfile.mkstemp(suffix=".wav")
-    os.close(fd)
-    try:
-        with wave.open(path, "wb") as f:
-            f.setnchannels(1)
-            f.setsampwidth(2)
-            f.setframerate(16000)
-            f.writeframes((np.clip(pcm, -1.0, 1.0) * 32767).astype("<i2").tobytes())
-        cmd = [config.WHISPER_CLI_BIN, "-m", config.ASR_MODEL, "-f", path, "-l", "zh",
-               "-nt", "-np", "-t", str(config.CPU_THREADS), "-ac", str(_audio_ctx(len(pcm)))]
-        if prompt:
-            cmd += ["--prompt", prompt]
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=config.ASR_TIMEOUT_SEC)
-    finally:
-        os.unlink(path)
-    if r.returncode != 0:
-        raise RuntimeError(f"whisper-cli 結束碼 {r.returncode}：{r.stderr[-300:]}")
-    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", r.stdout).strip()     # 去掉 [BLANK_AUDIO] 這類標記
+    """把錄音送給常駐的 whisper-server（multipart/form-data）。"""
+    import urllib.request
+    _start_whisper_server()                      # 意外結束時重新啟動
+    fields = {"audio_ctx": str(_audio_ctx(len(pcm))), "language": "zh", "response_format": "text",
+              "no_timestamps": "true", "temperature": "0"}
+    if prompt:
+        fields["prompt"] = prompt
+    boundary = "minglu" + os.urandom(8).hex()
+    body = b""
+    for name, value in fields.items():
+        body += (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'
+                 f"{value}\r\n").encode("utf-8")
+    body += (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\n'
+             f"Content-Type: audio/wav\r\n\r\n").encode() + _wav_bytes(pcm) + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{config.WHISPER_PORT}/inference", body,
+                                 {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=config.ASR_TIMEOUT_SEC) as r:
+        out = r.read().decode("utf-8", errors="replace")
+    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", out).strip()          # 去掉 [BLANK_AUDIO] 這類標記
     return _REPEAT_PHRASE_RE.sub(r"\1", text)                         # 小模型常把同一句重複好幾次
 
 

@@ -11,7 +11,7 @@ SRC_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 HF=https://huggingface.co
 NEF="$SRC_DIR/models/yolov8n_730.nef"
 
-[ -f "$NEF" ] || { echo "[錯誤] 找不到 $NEF，請先在電腦上照 README_KNEOPI.md 轉換模型。" >&2; exit 1; }
+[ -f "$NEF" ] || { echo "[錯誤] 找不到 $NEF，請先在電腦上照 README.md 轉換模型。" >&2; exit 1; }
 for tool in gcc g++ make cmake git curl python3; do
     command -v "$tool" >/dev/null || { echo "[錯誤] 缺少 $tool，請先用 pacman 安裝。" >&2; exit 1; }
 done
@@ -36,13 +36,13 @@ echo "[3/5] 建立 Python 環境"
     echo "[錯誤] 找不到 kp（Kneron PLUS Python）。請先照官方文件安裝後再執行一次。" >&2; exit 1; }
 "$HOME_DIR/venv/bin/pip" install --no-cache-dir -r "$SRC_DIR/deploy/kneopi/requirements.txt"
 
-echo "[4/5] 編譯 whisper.cpp（用 2 個核心，避免記憶體不足）"
-if [ ! -x "$HOME_DIR/bin/whisper-cli" ]; then
+echo "[4/5] 編譯 whisper.cpp 的 whisper-server（用 2 個核心，避免記憶體不足）"
+if [ ! -x "$HOME_DIR/bin/whisper-server" ]; then
     [ -d "$HOME_DIR/src/whisper.cpp" ] || \
         git clone --depth 1 https://github.com/ggml-org/whisper.cpp "$HOME_DIR/src/whisper.cpp"
     cmake -S "$HOME_DIR/src/whisper.cpp" -B "$HOME_DIR/src/whisper.cpp/build" -DCMAKE_BUILD_TYPE=Release
-    cmake --build "$HOME_DIR/src/whisper.cpp/build" --target whisper-cli -j2
-    cp "$HOME_DIR/src/whisper.cpp/build/bin/whisper-cli" "$HOME_DIR/bin/"
+    cmake --build "$HOME_DIR/src/whisper.cpp/build" --target whisper-server -j2
+    cp "$HOME_DIR/src/whisper.cpp/build/bin/whisper-server" "$HOME_DIR/bin/"
 fi
 
 echo "[5/5] 下載模型（約 2.7GB）"
