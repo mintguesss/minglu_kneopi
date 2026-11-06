@@ -337,15 +337,49 @@ applySettings();
 // 相機和麥克風一起要，iPhone 只會跳一次權限視窗（主畫面 App 每次開啟都會重問，無法記住）
 //   麥克風拿到權限後馬上關掉：一直開著的話 iPhone 會切到通話模式，喇叭聲音變小
 const CAM={facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}};
+let camStream=null, camOpening=true, camDenied=false, camLastT=-1, camStill=0;
+function stopCamera(){
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
+  video.srcObject=null;
+}
 function startCamera(s){
   s.getAudioTracks().forEach(t=>t.stop());
-  video.srcObject=new MediaStream(s.getVideoTracks());
+  stopCamera();
+  camStream=new MediaStream(s.getVideoTracks());
+  camStream.getVideoTracks().forEach(t=>{ t.onended=()=>setTimeout(reopenCamera, 500); });
+  video.srcObject=camStream;
+  camLastT=-1; camStill=0;
   dot.classList.remove('off');
+}
+// 重新開相機只要影像：麥克風權限第一次就要過了，再要一次 iPhone 會切到通話模式
+function reopenCamera(){
+  if(camOpening || camDenied || document.visibilityState!=='visible') return;
+  camOpening=true; stopCamera();
+  navigator.mediaDevices.getUserMedia({video:CAM}).then(startCamera)
+    .catch(e=>{ console.log('camera', e); if(e.name==='NotAllowedError') camDenied=true; })
+    .finally(()=>{ camOpening=false; });
 }
 navigator.mediaDevices.getUserMedia({video:CAM, audio:true})
   .then(startCamera)
   .catch(()=>navigator.mediaDevices.getUserMedia({video:CAM}).then(startCamera))   // 不給麥克風也能用相機
-  .catch(e=>{ show('相機錯誤：'+e.message); speak('相機錯誤'); });
+  .catch(e=>{ if(e.name==='NotAllowedError') camDenied=true; show('相機錯誤：'+e.message); speak('相機錯誤'); })
+  .finally(()=>{ camOpening=false; });
+// Android Chrome：頁面切到背景（關螢幕、切 App、重新打開網址）時，舊頁面會一直佔著相機，
+//   新頁面拿到的畫面全黑，要把 Chrome 滑掉才恢復。所以離開時就放掉相機，回來再重開。
+const ANDROID=/Android/i.test(navigator.userAgent);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible') reopenCamera();
+  else if(ANDROID) stopCamera();
+});
+window.addEventListener('pagehide', stopCamera);
+// 保險：畫面停住（相機被別的頁面搶走、系統暫停）超過約 4 秒就重開一次
+setInterval(()=>{
+  if(document.visibilityState!=='visible' || camOpening) return;
+  const t=video.currentTime;
+  camStill=(!camStream || video.readyState<2 || t===camLastT) ? camStill+1 : 0;
+  camLastT=t;
+  if(camStill>=2){ camStill=0; reopenCamera(); }
+}, 2000);
 
 // 更新結果卡片
 function show(text, opts){

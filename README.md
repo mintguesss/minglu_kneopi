@@ -207,7 +207,7 @@ MINGLU_PROFILE=kneopi python -m unittest tests.test_kneopi -v
 - [ ] 試 USB 3.0 儲存裝置能省多少時間
 - [x] Android 手機熱點下的連線（USB Wi-Fi 網卡 + LCD 顯示 IP）
 - [x] 板子的 LCD 顯示 IP 和狀態
-- [ ] 整台重開機後，服務和熱點連線能自動恢復（`systemctl restart minglu` 已確認正常，還沒實際重開機）
+- [x] 整台重開機後，服務和熱點連線能自動恢復（實測通過）
 - [ ] 真實場景的物品辨識和讀字準確度（特別是小字）
 - [ ] microSD 的耐用度（swap 會寫入）和長時間運作的溫度（工作溫度上限 50°C）
 - YOLOv8n 只認得 COCO 80 類，「沒有偵測到」不代表前方沒有障礙物
