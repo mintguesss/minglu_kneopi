@@ -102,15 +102,21 @@ class StatusDisplay:
         self._status = text
         self._refresh()
 
-    def _refresh(self) -> None:
+    # 每隔這麼久就重新初始化、整個重寫一次。I2C 上只要掉一個位元，LCD 的 4 位元傳輸就會錯位，
+    # 之後寫的字全部變成亂碼（實測 CPU 滿載時會出現 ooOO 和日文符號），所以要定期自我修復
+    HEAL_SEC = 10
+
+    def _refresh(self, force: bool = False) -> None:
         ip = hotspot_ip()
         lines = (ip or "No network", self._status)
         with self._lock:
-            if lines == self._shown:
+            if lines == self._shown and not force:
                 return
             try:
                 if self._lcd is None:
                     self._lcd = CharLCD(config.LCD_I2C_BUS, config.LCD_I2C_ADDR)
+                else:
+                    self._lcd._init()          # 每次都重新同步，前一次寫壞也不會延續下去
                 self._lcd.line(0, lines[0])
                 self._lcd.line(1, lines[1])
                 self._shown = lines
@@ -119,8 +125,12 @@ class StatusDisplay:
                 self._lcd, self._shown = None, None
 
     def _loop(self) -> None:
+        last_heal = time.monotonic()
         while True:
-            self._refresh()
+            force = time.monotonic() - last_heal >= self.HEAL_SEC
+            if force:
+                last_heal = time.monotonic()
+            self._refresh(force)
             time.sleep(3)
 
 
