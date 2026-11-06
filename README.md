@@ -128,7 +128,7 @@ journalctl -u minglu -f
 Ready :8443        ← 第二行：狀態
 ```
 
-第二行會依序顯示 `Loading...`（載入模型）、`Ready :8443`、`Listening`（語音辨識）、`Thinking`（Gemma 回答）、`Look: <模式>`（拍照描述），做完時，如果 YOLOv8n 有偵測到東西，就顯示偵測到的物品（例如 `2 person, 1 car`，多的在前），否則顯示 `Ready (25s)`（花了幾秒）。LCD 只能顯示英文和數字。看不到字時，調轉接板背面的藍色旋鈕（對比）。沒接 LCD 也不影響使用，設定在 `app/config.py` 的 `LCD_*`。
+第二行會依序顯示 `Loading...`（載入模型）、`Ready :8443`、`Listening`（語音辨識）、`Thinking`（Gemma 回答）、`Look: <模式>`（拍照描述），做完時，如果 YOLOv8n 有偵測到東西，就顯示偵測到的物品（例如 `2 person, 1 car`，多的在前）；Gemma 回答的，用中英對照表把回答裡提到的東西轉成英文（例如「這是一台電腦」→ `Computer`，「沒有看到」→ `Nothing seen`，對照表在 `app/lcd.py`）；都沒有就顯示 `Ready (25s)`（花了幾秒）。LCD 只能顯示英文和數字。看不到字時，調轉接板背面的藍色旋鈕（對比）。沒接 LCD 也不影響使用，設定在 `app/config.py` 的 `LCD_*`。
 
 ### 比賽現場：Android 手機熱點
 
