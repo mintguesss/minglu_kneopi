@@ -344,6 +344,58 @@ class WhisperTest(unittest.TestCase):
         self.assertEqual(self._run("謝謝觀看\n")[0], "")
 
 
+class LcdTest(unittest.TestCase):
+    def _lcd(self):
+        from app import lcd
+        d = lcd.CharLCD.__new__(lcd.CharLCD)
+        d.cols, d.rows, d.fd, sent = 16, 2, -1, []
+        return d, sent
+
+    def test_line_pads_truncates_and_replaces_non_ascii(self):
+        from app import lcd
+        d, sent = self._lcd()
+        with mock.patch.object(lcd.os, "write", lambda fd, b: sent.append(b[0])), \
+             mock.patch.object(lcd.time, "sleep"):
+            d.line(1, "前面 Ready 1234567890")
+        # 每個位元組送 2 個 nibble，每個 nibble 3 次寫入（資料、EN 高、EN 低）
+        data = sent[6:]                               # 跳過設定游標位置的指令
+        chars = []
+        for i in range(0, len(data), 6):
+            hi, lo = data[i] & 0xF0, data[i + 3] & 0xF0
+            self.assertTrue(data[i] & 0x01)           # RS=1：寫字元
+            chars.append(chr(hi | (lo >> 4)))
+        self.assertEqual("".join(chars), "?? Ready 1234567")
+        self.assertEqual(sent[0] & 0xF0, 0xC0)        # 第二行位址 0x40 → 指令 0xC0
+
+    def test_objects_summary_counts_most_first(self):
+        from app import lcd
+        self.assertEqual(lcd.objects_summary(["car", "person", "person"]), "2 person, 1 car")
+
+    def test_busy_shows_detected_objects_when_done(self):
+        from app import lcd
+        shown = []
+        with mock.patch.object(lcd, "status", shown.append):
+            with lcd.busy("Look: auto"):
+                lcd.show_objects(["chair", "person"])
+            with lcd.busy("Thinking"):                # 沒有偵測結果（例如問 Gemma）→ 顯示秒數
+                pass
+        self.assertEqual(shown[:2], ["Look: auto", "1 chair, 1 person"])
+        self.assertTrue(shown[3].startswith("Ready ("))
+
+    def test_busy_without_display_is_noop(self):
+        from app import lcd
+        with mock.patch.object(lcd, "_display", None):
+            with lcd.busy("Thinking"):
+                pass
+
+    def test_display_survives_missing_device(self):
+        from app import lcd
+        disp = lcd.StatusDisplay()
+        with mock.patch.object(lcd, "CharLCD", side_effect=OSError("no device")):
+            disp.set_status("Ready")                  # 不能丟例外
+        self.assertIsNone(disp._lcd)
+
+
 class ProfileTest(unittest.TestCase):
     def test_uses_original_model_families(self):
         self.assertIn("gemma-4-E2B", config.GEMMA_LITERTLM)

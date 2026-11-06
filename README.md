@@ -71,7 +71,8 @@ KNEO Pi 只有 2GB 記憶體和 4 核 1.1GHz 的 Cortex-A55，NPU 只能加速 C
 
 - Kneron KNEO Pi，官方系統（Arch Linux ARM，已內建 Kneron PLUS 的 `kp`）
 - 32GB 以上的 microSD，根分割區要擴大到整張卡
-- USB Wi-Fi 網卡（官方驗證過 TP-Link T2UB Nano、T3U Nano、T2U Nano），或網路線
+- USB Wi-Fi 網卡：板子本身沒有 Wi-Fi。實測 Realtek RTL8821CU（USB ID `0bda:c820`）插上就能用；官方另外驗證過 TP-Link T2UB Nano、T3U Nano、T2U Nano
+- （選用）I2C 字元 LCD：1602 + PCF8574 轉接板（位址 `0x27`），顯示板子的 IP 和狀態
 - Android 手機（測過 Samsung S24）
 - 一台有 Docker 的電腦：只有重新轉換 YOLOv8n 時需要，`models/yolov8n_730.nef` 已附在 repo 裡
 
@@ -92,7 +93,7 @@ dd if=/dev/zero of=/swapfile bs=1M count=4096 && chmod 600 /swapfile && mkswap /
 bash deploy/kneopi/install.sh
 ```
 
-4. 用 root 設定開機自動啟動。這一步會關閉桌面環境（省約 900MB）並設定 swappiness。`alarm` 不在 sudoers 裡，要先 `su - root`：
+4. 用 root 設定開機自動啟動。這一步會關閉桌面環境（省約 900MB）、設定 swappiness、把板子改名為 `minglu`，並讓 `alarm` 能用 I2C（LCD）。`alarm` 不在 sudoers 裡，要先 `su - root`：
 
 ```bash
 MINGLU_HOME=/home/alarm/minglu bash /home/alarm/<repo 資料夾>/deploy/kneopi/install-service.sh
@@ -115,23 +116,38 @@ journalctl -u minglu -f
 ## 使用
 
 1. 讓板子和手機在同一個網路。
-2. 手機用 Chrome 打開 `https://<板子的 IP>:8443`。查 IP：`ip -4 -o addr show wlan0`（網路線是 `eth0`）。
+2. 手機用 Chrome 打開 `https://<板子的 IP>:8443`。IP 看 LCD 第一行；沒有 LCD 時用 `ip -4 -o addr show wlan0` 查（網路線是 `eth0`）。
 3. 第一次會出現憑證警告，選擇「進階」→「繼續前往」，並允許相機和麥克風。
 
-不要靠 `kneo-pi.local` 這個名稱找板子：同一個網路上如果有別塊 KNEO Pi，名稱會一樣。
+### LCD 顯示
+
+接 1602 I2C LCD（VCC→5V、GND→GND、SDA→pin 3、SCL→pin 5，I2C 匯流排 0），開機後自動顯示：
+
+```
+10.18.204.191      ← 第一行：手機要連的 IP，熱點換 IP 會自動更新
+Ready :8443        ← 第二行：狀態
+```
+
+第二行會依序顯示 `Loading...`（載入模型）、`Ready :8443`、`Listening`（語音辨識）、`Thinking`（Gemma 回答）、`Look: <模式>`（拍照描述），做完時，如果 YOLOv8n 有偵測到東西，就顯示偵測到的物品（例如 `2 person, 1 car`，多的在前），否則顯示 `Ready (25s)`（花了幾秒）。LCD 只能顯示英文和數字。看不到字時，調轉接板背面的藍色旋鈕（對比）。沒接 LCD 也不影響使用，設定在 `app/config.py` 的 `LCD_*`。
 
 ### 比賽現場：Android 手機熱點
 
 出發前先用同一支手機設定好：
 
 1. 手機開熱點，固定名稱和密碼，頻段選 2.4GHz。
-2. 板子連一次熱點，之後開機會自動連：
+2. 板子插上 USB Wi-Fi 網卡，用 root 連一次熱點，之後開機會自動連。`--ask` 會詢問密碼，密碼不會留在指令紀錄裡：
 
 ```bash
-nmcli device wifi connect "<熱點名稱>" password "<熱點密碼>"
+nmcli --ask device wifi connect "<熱點名稱>"
 ```
 
-3. 查板子的 IP，用手機連線。IP 可能變動，現場要先確認一次；手機的熱點設定頁可能也看得到已連線裝置。
+3. 手機打開 LCD 上顯示的 IP。**熱點每次開關，IP 都可能變**，所以不要把 IP 寫死。
+
+實測過但不能用的方法：
+
+- `https://minglu.local:8443`（mDNS）：板子這邊廣播正常，但 Android 手機不解析連在自己熱點上的裝置的 `.local` 名稱。
+- 不要靠 `kneo-pi.local`：每塊 KNEO Pi 預設都叫這個名字，同一個網路上會撞名。`install-service.sh` 會把板子改名為 `minglu`。
+- 如果還是要用 mDNS（例如筆電連同一個 Wi-Fi），把 `/etc/avahi/avahi-daemon.conf` 設成 `allow-interfaces=wlan0`。沒有限制時，avahi 會在有線網路上收到自己的回音，名稱一直撞名改成 `minglu-2`、`minglu-3`……。
 
 ### 板子有 Tailscale 時
 
@@ -147,6 +163,7 @@ app/                        系統本體（和電腦版共用，用 MINGLU_PROFI
   scene.py                  把偵測結果組成繁中句子
   backends/gemma_litert.py  Gemma 4 E2B（LiteRT-LM）
   voice.py                  whisper-server、語音指令與提問
+  lcd.py                    I2C 字元 LCD（顯示 IP 和狀態）
 deploy/kneopi/              安裝腳本、開機服務、Python 套件清單
 models/yolov8n_730.nef      轉好的 YOLOv8n NPU 模型
 tools/kneopi/               模型轉換與實機測試工具
@@ -188,9 +205,9 @@ MINGLU_PROFILE=kneopi python -m unittest tests.test_kneopi -v
 
 - [ ] 語音提問約 30~40 秒，目標是 20 秒內。板子上幾乎不可能；最有希望的是讓手機自己跑 Gemma
 - [ ] 試 USB 3.0 儲存裝置能省多少時間
-- [ ] Android 手機熱點下的連線
-- [ ] 板子的 LCD 顯示狀態
-- [ ] 重開機後服務能自動恢復
+- [x] Android 手機熱點下的連線（USB Wi-Fi 網卡 + LCD 顯示 IP）
+- [x] 板子的 LCD 顯示 IP 和狀態
+- [ ] 整台重開機後，服務和熱點連線能自動恢復（`systemctl restart minglu` 已確認正常，還沒實際重開機）
 - [ ] 真實場景的物品辨識和讀字準確度（特別是小字）
 - [ ] microSD 的耐用度（swap 會寫入）和長時間運作的溫度（工作溫度上限 50°C）
 - YOLOv8n 只認得 COCO 80 類，「沒有偵測到」不代表前方沒有障礙物

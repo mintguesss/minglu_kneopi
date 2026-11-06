@@ -40,7 +40,7 @@ import threading
 import numpy as np
 from PIL import Image
 
-from app import config
+from app import config, lcd
 from app.assistant import build_backend
 
 BACKEND = None  # 啟動時載入一次
@@ -710,7 +710,7 @@ class Handler(BaseHTTPRequestHandler):
             global _SEQ
             t0 = time.perf_counter()
             from app import pipeline          # 所有模式的邏輯集中在這裡（OCR／過馬路混合流程／自動）
-            with GPU_LOCK:
+            with GPU_LOCK, lcd.busy(f"Look: {mode}"):
                 text, _mode_used = pipeline.describe(BACKEND, image, mode)
             dt = round(time.perf_counter() - t0, 1)
             print(f"[{mode}] ({dt}s) {text}")
@@ -747,7 +747,7 @@ class Handler(BaseHTTPRequestHandler):
                 heard = payload["text"]
             else:
                 pcm = np.frombuffer(base64.b64decode(payload["audio"]), dtype="<i2").astype(np.float32) / 32768.0
-                with GPU_LOCK:
+                with GPU_LOCK, lcd.busy("Listening"):
                     heard = voice.transcribe(pcm)
             print(f"[ask] 聽到：{heard or '（沒有內容）'}")
             if not heard:
@@ -788,7 +788,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"action": "answer", "heard": heard, "text": reason,
                                             "seconds": 0, "gated": True, "followup": followup}))
                 return
-            with GPU_LOCK:
+            with GPU_LOCK, lcd.busy("Thinking"):
                 text, used = voice.answer(BACKEND, image, heard, mode, history)
             dt = round(time.perf_counter() - t0, 1)
             print(f"[ask:{used}{' 追問' if followup else ''}] ({dt}s) {text}")
@@ -1014,6 +1014,8 @@ def main():
         os.makedirs(SAVE_DIR, exist_ok=True)
         print(f"[info] 會把每張畫面和系統說的話存到：{SAVE_DIR}/")
 
+    lcd.start()                               # 有接 LCD 才會顯示，先顯示 IP 讓手機可以連
+    lcd.status("Loading...")
     print(f"[info] 載入模型（{args.backend or config.BACKEND}）...")
     BACKEND = build_backend(backend=args.backend, device=args.device)
     BACKEND.load()
@@ -1056,6 +1058,7 @@ def main():
         if args.https:
             print("       （自簽憑證：第一次連線按「進階」→「繼續前往」）")
     print("       按 Ctrl+C 停止")
+    lcd.status(f"Ready :{port}")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

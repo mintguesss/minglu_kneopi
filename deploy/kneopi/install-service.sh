@@ -17,6 +17,11 @@ systemctl stop x11vnc x-server local-display 2>/dev/null || true
 echo 'vm.swappiness=180' > /etc/sysctl.d/99-minglu.conf
 sysctl -q vm.swappiness=180
 
+# 每塊 KNEO Pi 預設都叫 kneo-pi，同一個網路上會撞名；改成 minglu，手機熱點的裝置清單也比較好認
+hostnamectl set-hostname "${MINGLU_HOSTNAME:-minglu}"
+# LCD 走 I2C（/dev/i2c-0 屬於 i2c 群組）
+usermod -aG i2c "$RUN_USER"
+
 # 測試時可能有手動啟動的伺服器佔著連接埠和 NPU
 pkill -u "$RUN_USER" -f '[a]pp\.server' 2>/dev/null || true
 sleep 2

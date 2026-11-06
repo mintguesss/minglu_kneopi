@@ -5,7 +5,7 @@ Gemma 在 KNEO Pi 上一次可能要等好幾分鐘，所以周遭、室內、�
 只說偵測到的東西，不做推論；偵測不到時回傳 None，交給 VLM。
 """
 
-from app import detect
+from app import detect, lcd
 
 MIN_CONF = 0.40
 MAX_ITEMS = 4
@@ -75,4 +75,5 @@ def describe(image, mode):
     dets = [d for d in dets if d["cls"] != "traffic light"]     # 這個版本不談號誌
     if not dets:
         return None
+    lcd.show_objects([d["cls"] for d in dets])   # 板子 LCD 顯示偵測到的東西
     return _sentence(dets, w, h)
