@@ -712,6 +712,7 @@ class Handler(BaseHTTPRequestHandler):
             from app import pipeline          # 所有模式的邏輯集中在這裡（OCR／過馬路混合流程／自動）
             with GPU_LOCK, lcd.busy(f"Look: {mode}"):
                 text, _mode_used = pipeline.describe(BACKEND, image, mode)
+                lcd.show_answer(text)             # 有偵測結果時以偵測結果為準
             dt = round(time.perf_counter() - t0, 1)
             print(f"[{mode}] ({dt}s) {text}")
             if SAVE_DIR:
@@ -748,8 +749,10 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 pcm = np.frombuffer(base64.b64decode(payload["audio"]), dtype="<i2").astype(np.float32) / 32768.0
                 with GPU_LOCK, lcd.busy("Listening"):
+                    t_lock = time.perf_counter()  # 前一個請求（例如 Gemma 描述）還在跑時要排隊
                     heard = voice.transcribe(pcm)
-            print(f"[ask] 聽到：{heard or '（沒有內容）'}")
+                print(f"[ask] 聽到：{heard or '（沒有內容）'}（語音 {len(pcm) / 16000:.1f} 秒，"
+                      f"排隊 {t_lock - t0:.1f} 秒，辨識 {time.perf_counter() - t_lock:.1f} 秒）")
             if not heard:
                 self._send(200, json.dumps({"action": "none", "heard": "",
                                             "text": "沒有聽清楚，請再說一次。"}))
@@ -777,6 +780,11 @@ class Handler(BaseHTTPRequestHandler):
                                             "text": "相機還沒準備好。"}))
                 return
             image = _decode_image(payload["image"])
+            if config.PROFILE == "kneopi":        # 留下最後一張提問的畫面，答錯時可以檢查 Gemma 看到什麼
+                try:
+                    image.save("/tmp/minglu-last-ask.jpg", quality=80)
+                except OSError:
+                    pass
             # 對話歷史由手機保存、每次一起送來；是追問才沿用，否則當成新話題
             history = payload.get("history") or []
             followup = bool(history) and voice.is_followup(heard)
@@ -790,6 +798,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with GPU_LOCK, lcd.busy("Thinking"):
                 text, used = voice.answer(BACKEND, image, heard, mode, history)
+                lcd.show_answer(text)
             dt = round(time.perf_counter() - t0, 1)
             print(f"[ask:{used}{' 追問' if followup else ''}] ({dt}s) {text}")
             self._send(200, json.dumps({"action": "answer", "heard": heard, "text": text,

@@ -382,6 +382,22 @@ class LcdTest(unittest.TestCase):
         self.assertEqual(shown[:2], ["Look: auto", "1 chair, 1 person"])
         self.assertTrue(shown[3].startswith("Ready ("))
 
+    def test_answer_keywords_from_gemma_chinese(self):
+        from app import lcd
+        self.assertEqual(lcd.answer_keywords("這是一台電腦和一些周邊設備。"), "Computer")
+        self.assertEqual(lcd.answer_keywords("桌上有筆電和杯子。"), "Table, Laptop, Cup")
+        self.assertEqual(lcd.answer_keywords("沒有看到。"), "Nothing seen")
+        self.assertIsNone(lcd.answer_keywords("好的。"))
+
+    def test_detection_wins_over_answer(self):
+        from app import lcd
+        shown = []
+        with mock.patch.object(lcd, "status", shown.append):
+            with lcd.busy("Look: auto"):
+                lcd.show_objects(["person"])
+                lcd.show_answer("前方有一台電腦。")
+        self.assertEqual(shown[-1], "1 person")
+
     def test_busy_without_display_is_noop(self):
         from app import lcd
         with mock.patch.object(lcd, "_display", None):

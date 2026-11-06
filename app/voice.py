@@ -35,40 +35,44 @@ _PUNCT_RE = re.compile(r"[\s，。、！？!?,.：:；;「」『』（）()…~�
 _WHISPER_SERVER = None
 
 
-def _die_with_parent():
-    """在子程序裡執行：明路的伺服器結束（包含被 kill -9）時，whisper-server 跟著結束。"""
-    import ctypes
-    import signal
-    ctypes.CDLL(None).prctl(1, signal.SIGTERM)    # PR_SET_PDEATHSIG
-
-
 def _start_whisper_server():
     """[KNEO Pi] whisper.cpp 常駐在背景（whisper-server）。
     每次重新啟動 whisper-cli 會把 Gemma 擠出記憶體：實測每題要多讀 300~700MB 的 microSD，
     常駐後 Gemma 回答從 35~47 秒降到約 28 秒。"""
     global _WHISPER_SERVER
+    import time
+    import urllib.request
+
+    def alive() -> bool:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{config.WHISPER_PORT}/", timeout=1)
+            return True
+        except Exception:
+            return False
+
     if _WHISPER_SERVER is not None and _WHISPER_SERVER.poll() is None:
         return
     # 上一個伺服器被強制結束時，whisper-server 可能留下來。它用 SO_REUSEPORT，新的也綁得上同一個埠，
-    # 結果兩個一起佔記憶體、請求被輪流分給兩邊（實測讓 Gemma 變慢）。先清掉自己留下的。
+    # 結果兩個一起佔記憶體、請求被輪流分給兩邊（實測讓 Gemma 變慢）。
+    # 所以已經有一個在回應就直接沿用；沒有回應的才清掉、重新啟動。
+    if _WHISPER_SERVER is None and alive():
+        return
+    # 注意：不要用 PR_SET_PDEATHSIG 讓它跟著結束——那是跟著「建立它的執行緒」，
+    # 在處理請求的執行緒裡重新啟動時，請求一結束它就被關掉，每題都要重新載入（實測辨識變成 29 秒）。
     subprocess.run(["pkill", "-x", "-u", str(os.getuid()), "whisper-server"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _WHISPER_SERVER = subprocess.Popen(
         [config.WHISPER_SERVER_BIN, "-m", config.ASR_MODEL, "--host", "127.0.0.1",
          "--port", str(config.WHISPER_PORT), "-t", str(config.CPU_THREADS), "-l", "zh", "-nt"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=_die_with_parent)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     import atexit
     atexit.register(_WHISPER_SERVER.terminate)
-    import time
-    import urllib.request
     for _ in range(60):
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{config.WHISPER_PORT}/", timeout=1)
+        if alive():
             return
-        except Exception:
-            if _WHISPER_SERVER.poll() is not None:
-                raise RuntimeError("whisper-server 啟動失敗")
-            time.sleep(0.5)
+        if _WHISPER_SERVER.poll() is not None:
+            raise RuntimeError("whisper-server 啟動失敗")
+        time.sleep(0.5)
     raise RuntimeError("whisper-server 啟動逾時")
 
 
